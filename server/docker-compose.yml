@@ -1,0 +1,25 @@
+# Nexo Server: puerta SSH + panel de administración.
+# 1) Cambia los valores de "environment".  2) docker compose up -d
+# 3) docker compose logs nexo   -> ahí aparece la contraseña temporal del primer administrador.
+services:
+  nexo:
+    build: .
+    image: nexo-server:1.0.0
+    container_name: nexo-server
+    restart: unless-stopped
+    ports:
+      - "2222:2222"   # puerta SSH (usuarios y app Nexo)
+      - "8080:8080"   # panel web y API (publícalo detrás de HTTPS)
+    environment:
+      NEXO_ORG_NAME: "Mi organización"
+      NEXO_PUBLIC_HOST: "nexo.midominio.com"        # nombre/IP que usarán los clientes para la puerta SSH
+      NEXO_PUBLIC_URL: "https://nexo.midominio.com" # dirección pública del panel (detrás de tu proxy HTTPS)
+      NEXO_TRUST_PROXY: "1"                         # 1 si está detrás de un proxy (Nginx, NPM, Traefik, Caddy)
+      # NEXO_ADMIN_USER: "admin"
+      # NEXO_TOKEN_HOURS: "12"                      # duración de la sesión en la app
+      # NEXO_RECORD: "1"                            # grabar sesiones de terminal
+    volumes:
+      - nexo-data:/data   # base de datos, llave maestra, llave de la puerta y grabaciones: RESPÁLDALO
+
+volumes:
+  nexo-data:
