@@ -197,6 +197,7 @@ paned > separator:hover { background-color: @acc; }
 .enlace-badge { font-size: 0.7em; font-weight: bold; padding: 1px 6px; border-radius: 6px;
                 background-color: alpha(@acc, 0.22); color: @fg; }
 .enlace-badge.rdp { background-color: alpha(#c678dd, 0.30); }
+.enlace-badge.db { background-color: alpha(#f2c66d, 0.22); }
 .enlace-toast { background-color: @head; color: @fg; padding: 10px 18px; border-radius: 10px;
                 margin: 18px; border: 1px solid @acc; }
 .enlace-toast.error { background-color: #8e2a33; border-color: #ff6b7a; color: #fff; }
@@ -329,6 +330,8 @@ list.nx-palette-list row:selected { background-color: alpha(@acc, 0.16); color: 
 .enlace-toolbar { background-color: @head; border-bottom: 1px solid @line; }
 .enlace-toolbar button { background: transparent; border: none; box-shadow: none; color: @dim; border-radius: 6px; }
 .enlace-toolbar button:hover { color: @fg; background-color: alpha(@fg, 0.07); }
+.enlace-toolbar button.suggested-action { background-color: @acc; color: @acc_fg; padding: 3px 12px; }
+.enlace-toolbar button.suggested-action:hover { background-color: shade(@acc, 1.1); color: @acc_fg; }
 .enlace-toast { border-radius: 10px; border: 1px solid @border2; font-size: 13px; }
 paned > separator { min-width: 1px; min-height: 1px; background-color: @line; }
 paned > separator:hover { background-color: alpha(@acc, 0.45); }

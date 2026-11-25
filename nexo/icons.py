@@ -72,7 +72,8 @@ UI = {
     "trash": "trash3", "edit": "pencil", "grip": "grip-vertical", "broadcast": "broadcast",
     "shield": "shield-lock", "bolt": "lightning-charge", "plug": "plug", "recent": "clock-history",
     "import": "box-arrow-in-right", "new-folder": "folder-plus", "upload-folder": "file-earmark-arrow-up",
-    "org": "building",
+    "org": "building", "table": "table", "view": "eye", "collection": "collection", "database": "database",
+    "key2": "key",
 }
 
 
@@ -104,7 +105,10 @@ def host_icon(host):
     """Icono elegido o, si no hay, uno según el protocolo."""
     if host.get("icon") in ICONS:
         return host["icon"]
-    return "windows" if host.get("protocol") == "rdp" else "linux"
+    p = host.get("protocol")
+    if p in ("postgres", "mysql", "mssql", "mongodb", "redis"):
+        return "db"
+    return "windows" if p == "rdp" else "linux"
 
 
 def image(key, size=22, fallback="server"):

@@ -60,6 +60,9 @@ Nexo tiene dos piezas que puedes usar juntas o por separado:
   suben solos al guardar.
 - 🔀 **Túneles** locales, remotos y SOCKS; **saltos** por bastión con llave o contraseña.
 - 🪟 **RDP** con FreeRDP.
+- 🗄️ **Bases de datos**: PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB y Redis, con árbol de objetos,
+  editor con resaltado, resultados en tabla, exportación a CSV, modo **solo lectura** y **túnel SSH
+  automático**.
 - 🔑 **Llaves SSH**: genera e importa; se cargan en un agente propio y nunca se escriben
   descifradas en disco.
 - 🏢 **Organizaciones**: te conectas a un Nexo Server y ves solo lo que te asignaron.
@@ -78,6 +81,10 @@ Nexo tiene dos piezas que puedes usar juntas o por separado:
 | Temas y colores de acento | Organizaciones (Nexo Server) |
 |---|---|
 | ![Temas](docs/img/app-05-temas.png) | ![Organizaciones](docs/img/app-06-organizaciones.png) |
+
+| Base de datos (PostgreSQL) | Base de datos (MongoDB) |
+|---|---|
+| ![PostgreSQL](docs/img/app-08-postgres.png) | ![MongoDB](docs/img/app-09-mongodb.png) |
 
 ### Panel web de Nexo Server
 
@@ -141,6 +148,31 @@ crear una **contraseña maestra**: cifra todo lo que guardes y **no se puede rec
   terminal. También sirve `Ctrl+Shift+E` (derecha) o `Ctrl+Shift+O` (abajo).
 - **SFTP:** botón de carpeta en cada host. Los archivos que abres se suben solos al guardar.
 - **Ocultar el panel** y ver solo la consola: `F9`.
+
+### Paso 5 — Bases de datos
+
+1. Botón **+** → en **Protocolo** elige el motor: PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB o Redis.
+   El puerto se completa solo.
+2. Escribe la dirección, el usuario y la contraseña. En la pestaña **Base de datos** indica la base
+   inicial y, si quieres, activa:
+   - **Solo lectura:** recomendado para producción. Bloquea `INSERT`, `UPDATE`, `DELETE`, `$out`, `SET`
+     y otras escrituras.
+   - **TLS/SSL:** si el servidor lo exige.
+   - **Base de autenticación** (solo MongoDB): normalmente `admin`.
+3. Si la base **no está expuesta** a tu red, elige en **«Saltar por»** un host SSH que sí llegue a
+   ella. Nexo abre un túnel automático al conectar y lo cierra al salir. Puede ser un host de tu
+   organización con permiso de túneles.
+4. Doble clic: a la izquierda aparecen bases, esquemas, tablas, colecciones o claves. Doble clic en
+   una tabla muestra sus filas; **`Ctrl+Enter`** ejecuta la consulta (o lo que tengas seleccionado).
+
+| Motor | Qué escribes en el editor |
+|---|---|
+| PostgreSQL / MySQL / SQL Server | SQL normal; varias sentencias separadas por `;` |
+| MongoDB | Un filtro JSON para la colección elegida, o `coleccion.find({...})`, `coleccion.count({...})`, `coleccion.aggregate([...])` |
+| Redis | Un comando por línea: `GET clave`, `HGETALL usuario:1`, `SCAN 0 MATCH sesion:*` |
+
+Los controladores se instalan con el paquete (recomendados). Si te falta alguno, la app te dice cuál:
+`sudo apt install python3-psycopg2 python3-pymysql python3-pymssql python3-pymongo python3-redis`.
 
 ---
 
@@ -395,6 +427,8 @@ cd server && docker compose up -d --build
   las contraseñas que se escriben en `sudo`.
 - La llave privada de cada host debe cargarse sin frase de paso; queda cifrada en el servidor.
 - La app de escritorio es para Linux.
+- Las bases de datos se conectan desde la app (directo o por túnel SSH); Nexo Server todavía no las
+  administra ni las graba.
 
 ---
 

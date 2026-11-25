@@ -9,6 +9,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk  # noqa: E402
 
 from . import icons as I  # noqa: E402
+from . import dbclient as DB  # noqa: E402
 from . import keys as K  # noqa: E402
 from .vault import blank_host  # noqa: E402
 
@@ -105,6 +106,8 @@ class HostDialog(Gtk.Dialog):
         self.c_proto = Gtk.ComboBoxText()
         self.c_proto.append("ssh", "SSH (terminal + SFTP)")
         self.c_proto.append("rdp", "RDP (escritorio remoto)")
+        for pid, (label, _port, _m, _pkg) in DB.ENGINES.items():
+            self.c_proto.append(pid, f"{label} (base de datos)")
         self.c_proto.set_active_id(self.h["protocol"])
         r = self._row(g, r, "Protocolo", self.c_proto)
         self.e_host = Gtk.Entry(text=self.h["host"], placeholder_text="IP o nombre DNS", activates_default=True)
@@ -139,6 +142,10 @@ class HostDialog(Gtk.Dialog):
         r += 1
         self.c_jump = Gtk.ComboBoxText()
         self.c_jump.append("", "— directo —")
+        for o in self.vault.orgs:
+            for oh in self.vault.org_hosts(o):
+                if oh.get("perms", {}).get("tunnel"):
+                    self.c_jump.append(oh["id"], f"{oh['name']}  (vía {o['name']})")
         for h in sorted(self.vault.hosts, key=lambda x: x["name"].lower()):
             if h["protocol"] == "ssh" and h["id"] != self.h.get("id"):
                 self.c_jump.append(h["id"], f"{h['name']}  ({h['host']})")
@@ -193,6 +200,31 @@ class HostDialog(Gtk.Dialog):
         self.rdp_page = self._wrap(rg)
         nb.append_page(self.rdp_page, Gtk.Label(label="RDP"))
 
+        # --- Base de datos
+        dbo = self.h.get("db") or {}
+        dg = self._grid()
+        r = 0
+        self.e_dbname = Gtk.Entry(text=dbo.get("database") or "", placeholder_text="postgres, app_prod, 0 (Redis)…")
+        r = self._row(dg, r, "Base de datos", self.e_dbname)
+        self.e_authdb = Gtk.Entry(text=dbo.get("auth_db") or "", placeholder_text="admin")
+        self.l_authdb = Gtk.Label(label="Base de autenticación", xalign=1)
+        dg.attach(self.l_authdb, 0, r, 1, 1)
+        self.e_authdb.set_hexpand(True)
+        dg.attach(self.e_authdb, 1, r, 1, 1)
+        r += 1
+        self.sw_ro = Gtk.Switch(active=bool(dbo.get("readonly")), halign=Gtk.Align.START)
+        r = self._row(dg, r, "Solo lectura", self.sw_ro)
+        self.sw_tls = Gtk.Switch(active=bool(dbo.get("tls")), halign=Gtk.Align.START)
+        r = self._row(dg, r, "Cifrar con TLS/SSL", self.sw_tls)
+        dh = Gtk.Label(xalign=0, wrap=True, max_width_chars=52)
+        dh.set_markup("<small><b>Solo lectura</b> impide modificar datos: recomendado para producción.\n"
+                      "Si la base no está expuesta, usa <b>«Saltar por»</b> (pestaña General): Nexo abre un túnel SSH "
+                      "automático hacia ella, incluso por un host de tu organización con permiso de túneles.</small>")
+        dh.get_style_context().add_class("dim-label")
+        dg.attach(dh, 1, r, 1, 1)
+        self.db_page = self._wrap(dg)
+        nb.append_page(self.db_page, Gtk.Label(label="Base de datos"))
+
         # --- Notas
         self.notes = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=8, right_margin=8,
                                   top_margin=8, bottom_margin=8)
@@ -225,29 +257,33 @@ class HostDialog(Gtk.Dialog):
         return r + 1
 
     def _sync(self, widget):
+        from .conn import DEFAULT_PORTS
         proto = self.c_proto.get_active_id()
         is_rdp = proto == "rdp"
+        is_db = DB.is_db(proto)
         if widget is self.c_proto:
             port = int(self.s_port.get_value())
-            if is_rdp and port == 22:
-                self.s_port.set_value(3389)
-            elif not is_rdp and port == 3389:
-                self.s_port.set_value(22)
+            if port in DEFAULT_PORTS.values():
+                self.s_port.set_value(DEFAULT_PORTS.get(proto, 22))
         if widget is self.c_proto and not self._icon_touched:
             self.icon_picker.on_change = None
-            self.icon_picker.set_value("windows" if is_rdp else "linux")
+            self.icon_picker.set_value("windows" if is_rdp else "db" if is_db else "linux")
             self.icon_picker.on_change = lambda v: setattr(self, "_icon_touched", True)
-        if is_rdp:
+        if is_rdp or is_db:
             self.c_auth.set_active_id("password")
         for w in (self.l_auth, self.c_auth):
-            w.set_visible(not is_rdp)
-        use_key = not is_rdp and self.c_auth.get_active_id() == "key"
+            w.set_visible(not (is_rdp or is_db))
+        use_key = not (is_rdp or is_db) and self.c_auth.get_active_id() == "key"
         for w in (self.l_key, self.c_key):
             w.set_visible(use_key)
         for w in (self.l_pass, self.e_pass):
             w.set_visible(not use_key)
         self.rdp_page.set_visible(is_rdp)
-        self.tunnels_page.set_visible(not is_rdp)
+        self.db_page.set_visible(is_db)
+        for w in (self.l_authdb, self.e_authdb):
+            w.set_visible(proto == "mongodb")
+        self.tunnels_page.set_visible(proto == "ssh")
+        self.e_pass.set_placeholder_text("contraseña de la base de datos" if is_db else "vacío = preguntar al conectar")
 
     def _add_fw(self, fw):
         row = Gtk.Box(spacing=6)
@@ -290,7 +326,7 @@ class HostDialog(Gtk.Dialog):
         h["protocol"] = self.c_proto.get_active_id()
         h["port"] = int(self.s_port.get_value())
         h["user"] = self.e_user.get_text().strip()
-        h["auth"] = "password" if h["protocol"] == "rdp" else self.c_auth.get_active_id()
+        h["auth"] = "password" if h["protocol"] != "ssh" else self.c_auth.get_active_id()
         h["password"] = self.e_pass.get_text() if h["auth"] == "password" else ""
         h["key"] = (self.c_key.get_active_id() or None) if h["auth"] == "key" else None
         if h["auth"] == "key" and not h["key"]:
@@ -313,6 +349,12 @@ class HostDialog(Gtk.Dialog):
                 fw["dest_port"] = int(dport)
             fws.append(fw)
         h["forwards"] = fws if h["protocol"] == "ssh" else []
+        h["db"] = {
+            "database": self.e_dbname.get_text().strip(),
+            "auth_db": self.e_authdb.get_text().strip(),
+            "readonly": self.sw_ro.get_active(),
+            "tls": self.sw_tls.get_active(),
+        }
         h["rdp"] = {
             "domain": self.e_domain.get_text().strip(),
             "resolution": self.c_res.get_active_id(),

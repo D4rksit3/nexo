@@ -17,10 +17,13 @@ class ConnError(Exception):
     pass
 
 
+DEFAULT_PORTS = {"ssh": 22, "rdp": 3389, "postgres": 5432, "mysql": 3306, "mssql": 1433, "mongodb": 27017, "redis": 6379}
+
+
 def label(host):
     user = f"{host['user']}@" if host.get("user") else ""
-    port = host.get("port") or (3389 if host["protocol"] == "rdp" else 22)
-    default = 3389 if host["protocol"] == "rdp" else 22
+    default = DEFAULT_PORTS.get(host["protocol"], 22)
+    port = host.get("port") or default
     return f"{user}{host['host']}" + (f":{port}" if int(port) != default else "")
 
 

@@ -20,6 +20,7 @@ from . import conn  # noqa: E402
 from . import dialogs as D  # noqa: E402
 from . import icons as I  # noqa: E402
 from . import keys as K  # noqa: E402
+from . import dbclient as DBC  # noqa: E402
 from .sftp import SftpTab  # noqa: E402
 from .sidebar import GroupSection  # noqa: E402
 from . import themes as T  # noqa: E402
@@ -697,10 +698,13 @@ class Window(Gtk.ApplicationWindow):
         n = Gtk.Label(label=h["name"], xalign=0, ellipsize=Pango.EllipsizeMode.END)
         n.get_style_context().add_class("enlace-host-name")
         top.pack_start(n, False, True, 0)
-        if h["protocol"] == "rdp":
-            badge = Gtk.Label(label="RDP")
+        if h["protocol"] != "ssh":
+            badge = Gtk.Label(label="RDP" if h["protocol"] == "rdp" else DBC.SHORT.get(h["protocol"], h["protocol"]))
             badge.get_style_context().add_class("enlace-badge")
-            badge.get_style_context().add_class("rdp")
+            badge.get_style_context().add_class("rdp" if h["protocol"] == "rdp" else "db")
+            if (h.get("db") or {}).get("readonly"):
+                badge.set_text(badge.get_text() + " · RO")
+                badge.set_tooltip_text("Solo lectura")
             top.pack_start(badge, False, False, 0)
         txt.pack_start(top, False, False, 0)
         sub = conn.label(h) if not h.get("org") else f"vía {h['org_name']}"
@@ -1461,7 +1465,9 @@ class NexoApp(Gtk.Application):
     def connect_host(self, host):
         host = self.vault.host(host["id"]) or host
         self._touch(host)
-        if host["protocol"] == "rdp":
+        if DBC.is_db(host["protocol"]):
+            self.open_db(host)
+        elif host["protocol"] == "rdp":
             self.open_rdp(host)
         else:
             self.open_ssh(host)
@@ -1635,6 +1641,11 @@ class NexoApp(Gtk.Application):
             self.open_ssh(host)
             return
         t.split(t.active, orientation, target=self.vault.host(host["id"]) or host)
+
+    def open_db(self, host):
+        from .dbtab import DbTab
+        tab = DbTab(self, host)
+        self.win.add_tab(tab, host["name"], I.icon_name(I.host_icon(host)))
 
     def open_sftp(self, host):
         host = self.vault.host(host["id"]) or host

@@ -340,5 +340,6 @@ def blank_host():
             "share_home": False,
         },
         "icon": None,
+        "db": {"database": "", "readonly": False, "tls": False},
         "notes": "",
     }
