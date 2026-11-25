@@ -1497,6 +1497,8 @@ class NexoApp(Gtk.Application):
     def pane_target(self, host):
         """(fábrica de argv, título) para un panel: host SSH o terminal local (None)."""
         if host is None:
+            if os.environ.get("SNAP"):
+                return (lambda: (self._snap_local_shell(), {})), "Local"
             shell = os.environ.get("SHELL") or shutil.which("bash") or "/bin/sh"
             return (lambda: ([shell, "-l"], {})), "Local"
         hid = host["id"]
@@ -1508,6 +1510,21 @@ class NexoApp(Gtk.Application):
             return self.builder.ssh(h)
 
         return factory, host["name"]
+
+    @staticmethod
+    def _snap_local_shell():
+        """En el snap la terminal local está aislada: no puede leer /etc/profile.d ni el
+        ~/.bashrc real. Arranca bash sin perfiles, con un prompt propio y un aviso."""
+        rc = os.path.join(os.environ.get("SNAP_USER_DATA") or os.path.expanduser("~"), "nexo-local.bashrc")
+        with open(rc, "w", encoding="utf-8") as f:
+            f.write(
+                'PS1=\'\\[\\e[1;32m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ \'\n'
+                "alias ls='ls --color=auto' grep='grep --color=auto'\n"
+                "cd \"${SNAP_REAL_HOME:-$HOME}\" 2>/dev/null\n"
+                "printf '\\e[2mTerminal local aislada (Nexo instalado como snap). "
+                "Para administrar este equipo usa la terminal del sistema.\\e[0m\\n'\n"
+            )
+        return ["/bin/bash", "--noprofile", "--rcfile", rc, "-i"]
 
     # --- tema --------------------------------------------------------------
     def _load_css(self):
