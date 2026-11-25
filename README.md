@@ -5,12 +5,12 @@
 <h1 align="center">Nexo</h1>
 
 <p align="center">
-  <b>Cliente SSH · SFTP · túneles · RDP</b> con bóveda cifrada, y <b>Nexo Server</b>: un servidor de acceso
+  <b>Cliente SSH · SFTP · túneles · RDP · bases de datos</b> con bóveda cifrada, y <b>Nexo Server</b>: un servidor de acceso
   autoalojado para que tu organización controle quién entra a qué servidor <b>sin entregar llaves</b>.
 </p>
 
 <p align="center">
-  <img src="docs/img/app-03-terminales-divididas.png" alt="Nexo: terminales divididas" width="900">
+  <img src="docs/img/nexo-todo-en-uno.png" alt="Nexo: todas las funciones en una imagen" width="960">
 </p>
 
 ---
@@ -101,6 +101,7 @@ Nexo tiene dos piezas que puedes usar juntas o por separado:
 ## 3. Instalar la app de escritorio (paso a paso)
 
 > Probada en **Ubuntu 24.04 / 26.04**. Funciona en distribuciones con GTK 3 y VTE.
+> En **Windows 10 (21H2+) / 11** se instala con un asistente que la ejecuta sobre WSL2 (opción C).
 
 ### Paso 1 — Descargar e instalar
 
@@ -122,7 +123,35 @@ cd nexo
 sudo apt install ./dist/nexo_*_all.deb
 ```
 
-Recomendado para todas las funciones: `sudo apt install sshpass freerdp3-x11`. `sshpass` sirve para
+**Opción C: Windows 10 (21H2 o superior) / 11**
+
+Nexo usa componentes de Linux (la terminal VTE, `sshpass`, `ssh-agent`), así que en Windows corre
+dentro de **WSL2**. Las ventanas se muestran como las de cualquier programa de Windows gracias a WSLg.
+El instalador lo prepara todo:
+
+1. En **[Releases](https://github.com/D4rksit3/nexo/releases/latest)** descarga `NexoSetup-<versión>.exe`.
+2. Ejecútalo. Windows puede mostrar *«Windows protegió su PC»* porque el instalador no está firmado:
+   pulsa **Más información → Ejecutar de todas formas**.
+3. El asistente:
+   - activa **WSL** si no lo tienes. Pide permiso de administrador y **reiniciar**; al volver a
+     iniciar sesión la instalación continúa sola;
+   - descarga **Ubuntu 24.04 oficial para WSL** (unos 350 MB, solo la primera vez) y comprueba su
+     **SHA256**;
+   - crea una distribución WSL propia llamada **«Nexo»**, sin tocar otras que ya tengas, e instala
+     la app dentro.
+4. Abre **Nexo** desde el menú Inicio.
+
+- **Actualizar:** ejecuta el `NexoSetup` de la versión nueva; conserva tu bóveda.
+- **Desinstalar:** *Configuración → Aplicaciones → Nexo*. Antes de borrar, guarda una copia de la
+  bóveda (sigue cifrada) en `Documentos\Nexo-respaldo-<fecha>.tar.gz`.
+- **Sin instalador:** `nexo-windows-<versión>.zip` trae lo mismo; descomprímelo y ejecuta
+  `Instalar-Nexo.cmd`.
+- **Dónde quedan tus datos:** `\\wsl$\Nexo\home\nexo\.local\share\nexo`. Registro de instalación:
+  `%LOCALAPPDATA%\Nexo\instalacion.log`.
+
+Para generar los paquetes de Windows desde Linux: `./packaging/build-windows.sh` (necesita Docker).
+
+En Linux, recomendado para todas las funciones: `sudo apt install sshpass freerdp3-x11`. `sshpass` sirve para
 contraseñas y organizaciones; `freerdp3-x11`, para RDP.
 
 ### Paso 2 — Abrir Nexo y crear tu bóveda
@@ -426,7 +455,8 @@ cd server && docker compose up -d --build
 - Las grabaciones guardan lo que se vio en pantalla, no lo que se tecleó. Así no quedan, por ejemplo,
   las contraseñas que se escriben en `sudo`.
 - La llave privada de cada host debe cargarse sin frase de paso; queda cifrada en el servidor.
-- La app de escritorio es para Linux.
+- En Windows la app no es nativa: corre sobre WSL2 (Windows 10 21H2+ / 11, con la virtualización
+  activada en la BIOS).
 - Las bases de datos se conectan desde la app (directo o por túnel SSH); Nexo Server todavía no las
   administra ni las graba.
 
