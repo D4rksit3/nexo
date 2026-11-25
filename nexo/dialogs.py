@@ -407,7 +407,7 @@ def generate_key_dialog(parent):
 def import_key_dialog(parent):
     """Devuelve un registro de llave listo para la bóveda, o None."""
     d = Gtk.FileChooserNative.new("Importar llave privada", parent, Gtk.FileChooserAction.OPEN, None, None)
-    ssh_dir = os.path.expanduser("~/.ssh")
+    ssh_dir = os.path.join(os.environ.get("SNAP_REAL_HOME") or os.path.expanduser("~"), ".ssh")
     if os.path.isdir(ssh_dir):
         d.set_current_folder(ssh_dir)
     ok = d.run() == Gtk.ResponseType.ACCEPT

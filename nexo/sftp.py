@@ -517,8 +517,8 @@ class SftpTab(Gtk.Box):
     def _chooser(self, title, action, multiple=False):
         d = Gtk.FileChooserNative.new(title, self.app.win, action, None, None)
         d.set_select_multiple(multiple)
-        start = os.path.expanduser("~/Descargas")
-        d.set_current_folder(start if os.path.isdir(start) else os.path.expanduser("~"))
+        start = os.path.join(conn.REAL_HOME, "Descargas")
+        d.set_current_folder(start if os.path.isdir(start) else conn.REAL_HOME)
         if d.run() == Gtk.ResponseType.ACCEPT:
             files = d.get_filenames()
             d.destroy()

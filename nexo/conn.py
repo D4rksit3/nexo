@@ -11,6 +11,11 @@ from . import keys as K
 
 SSH = shutil.which("ssh") or "/usr/bin/ssh"
 SSHPASS = shutil.which("sshpass")
+# Carpeta personal real (en un snap, $HOME apunta a ~/snap/nexo/<rev>).
+REAL_HOME = os.environ.get("SNAP_REAL_HOME") or os.path.expanduser("~")
+# Dentro de un snap (confinamiento estricto) ssh no puede escribir el ~/.ssh real.
+SNAP_KNOWN_HOSTS = (os.path.join(os.environ["SNAP_USER_COMMON"], "known_hosts")
+                    if os.environ.get("SNAP_USER_COMMON") else None)
 
 
 class ConnError(Exception):
@@ -64,13 +69,17 @@ class Builder:
         return opts
 
     def _common(self):
-        return [
+        opts = [
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "LogLevel=ERROR",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
             "-o", "ConnectTimeout=15",
         ]
+        if SNAP_KNOWN_HOSTS:
+            # En el snap, ssh no puede escribir el ~/.ssh real: known_hosts propio.
+            opts += ["-o", f"UserKnownHostsFile={SNAP_KNOWN_HOSTS}"]
+        return opts
 
     def _jump_opts(self, host, env, seen=None, depth=1):
         """ProxyCommand para llegar a `host` a través de su salto (y los saltos del salto).
@@ -266,6 +275,8 @@ def paramiko_client(vault, host, _seen=None):
     client = paramiko.SSHClient()
     try:
         client.load_system_host_keys()
+        if SNAP_KNOWN_HOSTS and os.path.exists(SNAP_KNOWN_HOSTS):
+            client.get_host_keys().load(SNAP_KNOWN_HOSTS)
     except Exception:  # noqa: BLE001
         pass
     # Llave nueva: se acepta. Llave distinta a la de known_hosts: paramiko la rechaza.
@@ -366,7 +377,7 @@ class RdpSession:
             if o.get("clipboard", True):
                 args.append("+clipboard")
             if o.get("share_home"):
-                args.append(f"/drive:home,{os.path.expanduser('~')}")
+                args.append(f"/drive:home,{REAL_HOME}")
 
             if "freerdp3" in os.path.basename(binary):
                 # Los argumentos (incluida la contraseña) van por stdin: no quedan en `ps`.

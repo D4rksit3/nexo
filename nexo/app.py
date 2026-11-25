@@ -1009,7 +1009,10 @@ class Window(Gtk.ApplicationWindow):
 
 class NexoApp(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
+        # En el snap AppArmor no deja tomar el nombre D-Bus com.seguricloud.Nexo:
+        # se ejecuta sin instancia única en lugar de fallar al iniciar.
+        flags = Gio.ApplicationFlags.NON_UNIQUE if os.environ.get("SNAP") else Gio.ApplicationFlags.FLAGS_NONE
+        super().__init__(application_id=APP_ID, flags=flags)
         self.vault = Vault()
         self.agent = None
         self.builder = None
@@ -1795,10 +1798,17 @@ class NexoApp(Gtk.Application):
     def import_config(self):
         if not self.vault.unlocked:
             return
-        path = os.path.expanduser("~/.ssh/config")
-        if not os.path.exists(path):
-            D.msg(self.win, "No existe ~/.ssh/config")
-            return
+        path = os.path.join(conn.REAL_HOME, ".ssh", "config")
+        if not os.access(path, os.R_OK):
+            # En el snap la carpeta oculta ~/.ssh no es visible: se elige el archivo
+            # con el selector del sistema, que da acceso solo a ese archivo.
+            d = Gtk.FileChooserNative.new("Elige tu archivo de configuración SSH (~/.ssh/config)",
+                                          self.win, Gtk.FileChooserAction.OPEN, None, None)
+            ok = d.run() == Gtk.ResponseType.ACCEPT
+            path = d.get_filename() if ok else None
+            d.destroy()
+            if not path:
+                return
         entries = conn.parse_ssh_config(path)
         existing = {(h["host"], int(h.get("port") or 22), h.get("user") or "") for h in self.vault.hosts}
         by_alias = {h["name"]: h for h in self.vault.hosts}
@@ -1813,8 +1823,9 @@ class NexoApp(Gtk.Application):
             h = blank_host()
             h.update(name=e["alias"], group="~/.ssh/config", host=hostname, port=port, user=user)
             if e.get("identityfile"):
-                kp = os.path.expanduser(e["identityfile"])
-                rec = D.load_key_file(self.win, kp) if os.path.exists(kp) else None
+                kp = e["identityfile"]
+                kp = os.path.join(conn.REAL_HOME, kp[2:]) if kp.startswith("~/") else os.path.expanduser(kp)
+                rec = D.load_key_file(self.win, kp) if os.access(kp, os.R_OK) else None
                 if rec:
                     h["key"] = self._add_key(rec)["id"]
                     h["auth"] = "key"

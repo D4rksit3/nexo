@@ -1,0 +1,12 @@
+#!/bin/sh
+# Lanzador de Nexo dentro del snap: usa el Python y las librerías empaquetadas.
+for d in "$SNAP"/usr/lib/*-linux-gnu; do
+    [ -d "$d/girepository-1.0" ] && GI_TYPELIB_PATH="$d/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+done
+export GI_TYPELIB_PATH
+export PYTHONPATH="$SNAP/usr/share/nexo:$SNAP/usr/lib/python3/dist-packages"
+export PATH="$SNAP/usr/bin:$SNAP/bin:$PATH"
+export SHELL="${SHELL:-/bin/bash}"
+PY="$SNAP/usr/bin/python3"
+[ -x "$PY" ] || PY=/usr/bin/python3   # core24 ya trae Python 3.12
+exec "$PY" -c 'import sys; from nexo.app import main; sys.exit(main())' "$@"

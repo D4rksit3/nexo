@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Nexo
+GenericName=SSH, SFTP, RDP y bases de datos
+Comment=SSH, SFTP, túneles, RDP y bases de datos con bóveda cifrada
+Exec=nexo
+Icon=${SNAP}/meta/gui/nexo.svg
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=ssh;sftp;rdp;terminal;tunnel;postgres;mysql;mongodb;redis;
+StartupWMClass=nexo
+StartupNotify=true

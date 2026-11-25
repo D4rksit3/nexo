@@ -1,0 +1,82 @@
+name: nexo
+title: Nexo
+base: core24
+adopt-info: nexo
+summary: Cliente SSH, SFTP, RDP y bases de datos con bóveda cifrada
+description: |
+  Nexo junta en una sola app ligera lo que usas para administrar servidores:
+
+  - Terminales SSH en pestañas y paneles divididos (arrastra una pestaña al costado)
+  - SFTP con edición remota: guardas y el archivo se sube solo
+  - Escritorio remoto (RDP), túneles de puertos y saltos por bastión
+  - Bases de datos: PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB y Redis,
+    con modo solo lectura y túnel SSH automático
+  - Bóveda local cifrada (AES-256-GCM + scrypt) con autobloqueo
+  - Organizaciones: conéctate a un Nexo Server y entra a los servidores que te
+    asignen, con 2FA, sin recibir ninguna llave
+
+  Código abierto: https://github.com/D4rksit3/nexo
+license: MIT
+grade: stable
+confinement: strict
+icon: snap/gui/nexo.svg
+website: https://github.com/D4rksit3/nexo
+source-code: https://github.com/D4rksit3/nexo
+issues: https://github.com/D4rksit3/nexo/issues
+contact: https://github.com/D4rksit3/nexo/issues
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  nexo:
+    command: bin/nexo-launch
+    desktop: meta/gui/nexo.desktop
+    common-id: com.seguricloud.Nexo
+    extensions: [gnome]
+    plugs:
+      - network
+      - network-bind
+      - home
+      - login-session-observe
+
+parts:
+  nexo:
+    plugin: dump
+    source: .
+    source-type: local
+    override-pull: |
+      craftctl default
+      craftctl set version="$(python3 -c 'import re;print(re.search(r"__version__\s*=\s*\"([^\"]+)\"", open("nexo/__init__.py").read()).group(1))')"
+    override-build: |
+      install -Dm755 snap/local/nexo-launch "$CRAFT_PART_INSTALL/bin/nexo-launch"
+      mkdir -p "$CRAFT_PART_INSTALL/usr/share/nexo"
+      cp -r nexo "$CRAFT_PART_INSTALL/usr/share/nexo/"
+      find "$CRAFT_PART_INSTALL/usr/share/nexo" -name __pycache__ -prune -exec rm -rf {} +
+      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/nexo/copyright"
+    build-packages:
+      - python3
+    stage-packages:
+      - python3
+      - python3-gi
+      - python3-cairo
+      - gir1.2-vte-2.91
+      - libvte-2.91-0
+      - gir1.2-gtksource-4
+      - libgtksourceview-4-0
+      - python3-paramiko
+      - python3-cryptography
+      - openssh-client
+      - sshpass
+      - freerdp3-x11
+      - python3-psycopg2
+      - python3-pymysql
+      - python3-pymssql
+      - python3-pymongo
+      - python3-redis
+      - fonts-inter-variable
+      - fonts-jetbrains-mono
+    stage:
+      - -usr/share/doc/*/changelog*
+      - -usr/share/man

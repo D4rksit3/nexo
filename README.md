@@ -123,6 +123,23 @@ cd nexo
 sudo apt install ./dist/nexo_*_all.deb
 ```
 
+**Opción B2: Snap (App Center de Ubuntu)**
+
+```bash
+sudo snap install nexo
+```
+
+También aparece buscando «Nexo» en el **App Center**. El snap trae todo dentro: ssh, sshpass,
+FreeRDP, los controladores de bases de datos y las fuentes. Se actualiza solo. Diferencias con el `.deb`:
+
+- Corre aislado: no ve tus carpetas ocultas. «Importar `~/.ssh/config`» y «Importar llave» abren el
+  selector de archivos para que elijas el archivo (pulsa `Ctrl+H` para ver las carpetas ocultas).
+- Su bóveda es independiente de la del `.deb` (`~/snap/nexo/`). Si cambias de una a otra, vuelve a
+  importar tus hosts.
+- La **terminal local** también corre aislada. Para administrar tu propio equipo usa la terminal del sistema.
+
+Para generar el snap desde el código: `snapcraft pack` (necesita `snapcraft` y LXD).
+
 **Opción C: Windows 10 (21H2 o superior) / 11**
 
 Nexo usa componentes de Linux (la terminal VTE, `sshpass`, `ssh-agent`), así que en Windows corre

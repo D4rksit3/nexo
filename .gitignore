@@ -4,3 +4,7 @@ dist/
 server/data/
 .venv/
 *.deb
+*.snap
+parts/
+stage/
+prime/
