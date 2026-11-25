@@ -244,6 +244,8 @@ headerbar.nx-headerbar { background-color: @head; border-bottom: 1px solid @line
                          padding: 0 6px; box-shadow: none; }
 .nx-brand { font-weight: 700; font-size: 14px; letter-spacing: -0.2px; }
 .nx-brand-sub { color: @dim; font-size: 12px; }
+button.nx-update-pill { background-color: alpha(@acc, 0.14); border: 1px solid alpha(@acc, 0.45); border-radius: 999px; color: @acc; padding: 2px 12px; font-weight: 600; margin: 0 6px; }
+button.nx-update-pill:hover { background-color: alpha(@acc, 0.24); }
 button.nx-search-pill { background-color: @surf; border: 1px solid @line; border-radius: 8px; color: @dim;
                         padding: 3px 10px; min-height: 26px; font-size: 13px; box-shadow: none; }
 button.nx-search-pill:hover { background-color: @surf2; border-color: @border2; color: @fg; }
@@ -302,6 +304,8 @@ button.nx-tab-close:hover { background-color: alpha(@fg, 0.12); opacity: 1; }
 .nx-welcome, .nx-welcome scrolledwindow, .nx-welcome viewport { background-color: @term; }
 .nx-hero-title { font-size: 26px; font-weight: 700; letter-spacing: -0.6px; }
 .nx-muted { color: @dim; }
+.nx-mono { font-family: "JetBrains Mono", monospace; font-size: 12px; }
+.nx-dialog-title { font-size: 15px; }
 .nx-caption { color: @dim; font-size: 11.5px; }
 .nx-section-label { color: @dim; font-size: 10.5px; font-weight: 600; letter-spacing: 1px; }
 entry.nx-quick { min-height: 42px; font-size: 14px; border-radius: 10px; background-color: @surf;

@@ -24,6 +24,7 @@ from . import dbclient as DBC  # noqa: E402
 from .sftp import SftpTab  # noqa: E402
 from .sidebar import GroupSection  # noqa: E402
 from . import themes as T  # noqa: E402
+from . import updates as U  # noqa: E402
 from .terminal import DRAG_HOST, DRAG_PANE, DRAG_TAB, SplitTab, TerminalPane  # noqa: E402
 from .widgets import AccentDot, ThemeCard  # noqa: E402
 from .vault import Vault, VaultError, blank_host  # noqa: E402
@@ -102,6 +103,10 @@ class Window(Gtk.ApplicationWindow):
         menu.append("Importar hosts de ~/.ssh/config", "app.import-config")
         menu.append("Cambiar contraseña maestra", "app.change-password")
         menu.append("Autobloqueo…", "app.autolock")
+        upd = Gio.Menu()
+        upd.append("Buscar actualizaciones", "app.check-updates")
+        upd.append("Avisarme de actualizaciones", "app.update-notify")
+        menu.append_section(None, upd)
         sec = Gio.Menu()
         sec.append("Bloquear (Ctrl+L)", "app.lock")
         sec.append("Acerca de Nexo", "app.about")
@@ -117,6 +122,18 @@ class Window(Gtk.ApplicationWindow):
         self.b_theme.add(I.ui_image("palette", 16))
         self.b_theme.set_popover(self._build_theme_popover())
         hb.pack_end(self.b_theme)
+        self.b_update = Gtk.Button()
+        self.b_update.get_style_context().add_class("nx-update-pill")
+        self.b_update.set_valign(Gtk.Align.CENTER)
+        ub = Gtk.Box(spacing=6)
+        ub.pack_start(I.ui_image("download", 14), False, False, 0)
+        self.update_lbl = Gtk.Label(label="Actualización")
+        ub.pack_start(self.update_lbl, False, False, 0)
+        self.b_update.add(ub)
+        self.b_update.set_no_show_all(True)
+        ub.show_all()
+        self.b_update.connect("clicked", lambda *_: app.show_update())
+        hb.pack_end(self.b_update)
 
         # se ubican en el riel / encabezados (se mantienen como atributos)
         self.b_new = Gtk.Button()
@@ -1061,7 +1078,107 @@ class NexoApp(Gtk.Application):
         a = Gio.SimpleAction.new("autolock", None)
         a.connect("activate", lambda *_: self.autolock_settings())
         self.add_action(a)
+        a = Gio.SimpleAction.new("check-updates", None)
+        a.connect("activate", lambda *_: self.check_updates(manual=True))
+        self.add_action(a)
+        a = Gio.SimpleAction.new_stateful("update-notify", None,
+                                          GLib.Variant.new_boolean(self.ui.get("update_check", True)))
+        a.connect("change-state", self._toggle_update_notify)
+        self.add_action(a)
         self._setup_autolock()
+        self.update_info = None
+        GLib.timeout_add_seconds(4, lambda: self.check_updates() and False)
+        GLib.timeout_add_seconds(U.CHECK_EVERY_S, lambda: self.check_updates() or True)
+
+    # --- actualizaciones -------------------------------------------------
+    def _toggle_update_notify(self, action, value):
+        action.set_state(value)
+        self.ui["update_check"] = value.get_boolean()
+        T.save_ui(self.ui)
+        if not value.get_boolean() and self.win:
+            self.win.b_update.hide()
+        self.toast("Avisos de actualización " + ("activados" if value.get_boolean() else "desactivados"))
+
+    def check_updates(self, manual=False):
+        if not manual and not self.ui.get("update_check", True):
+            return False
+
+        def done(info, err):
+            GLib.idle_add(lambda: self._on_update_info(info, err, manual) and False)
+        U.check_async(done)
+        return False
+
+    def _on_update_info(self, info, err, manual):
+        if err or not info or not info.get("version"):
+            if manual:
+                self.toast("No se pudo consultar si hay versiones nuevas (¿sin conexión?)", error=True)
+            return False
+        if not U.newer(info["version"]):
+            if manual:
+                self.toast(f"Estás al día: Nexo {__version__} es la última versión")
+            return False
+        self.update_info = info
+        skipped = self.ui.get("update_skip") == info["version"]
+        if self.win and (manual or not skipped):
+            self.win.update_lbl.set_text(f"Actualización {info['version']}")
+            self.win.b_update.set_tooltip_text(f"Hay una versión nueva de Nexo: {info['version']} (tienes {__version__})")
+            self.win.b_update.show()
+        if manual:
+            self.show_update()
+        return False
+
+    def show_update(self):
+        info = self.update_info
+        if not info:
+            return
+        text, cmd, url = U.instructions(info)
+        d = Gtk.Dialog(title="Actualización disponible", transient_for=self.win, modal=True)
+        d.set_default_size(520, -1)
+        box = d.get_content_area()
+        box.set_spacing(10)
+        for m in ("start", "end", "top", "bottom"):
+            getattr(box, f"set_margin_{m}")(18)
+        t = Gtk.Label(xalign=0)
+        t.set_markup(f"<b>Nexo {GLib.markup_escape_text(info['version'])}</b> está disponible "
+                     f"(tienes la {__version__}).")
+        t.get_style_context().add_class("nx-dialog-title")
+        box.pack_start(t, False, False, 0)
+        notes = U.summary(info.get("notes", ""))
+        if notes:
+            nl = Gtk.Label(xalign=0, wrap=True, max_width_chars=60)
+            nl.set_text("\n".join(f"•  {n}" for n in notes))
+            nl.get_style_context().add_class("nx-muted")
+            box.pack_start(nl, False, False, 0)
+        il = Gtk.Label(label=text, xalign=0, wrap=True, max_width_chars=60)
+        box.pack_start(il, False, False, 4)
+        if cmd:
+            row = Gtk.Box(spacing=6)
+            e = Gtk.Entry(text=cmd, editable=False, hexpand=True)
+            e.get_style_context().add_class("nx-mono")
+            row.pack_start(e, True, True, 0)
+            cb = Gtk.Button()
+            cb.add(I.ui_image("copy", 14))
+            cb.set_tooltip_text("Copiar comando")
+            cb.connect("clicked", lambda *_: self.copy_text(cmd, "Comando copiado"))
+            row.pack_start(cb, False, False, 0)
+            box.pack_start(row, False, False, 0)
+        d.add_button("Omitir esta versión", 1)
+        d.add_button("Ahora no", Gtk.ResponseType.CLOSE)
+        d.add_button("Descargar" if U.install_kind() == "windows" else "Ver novedades", Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.OK)
+        d.get_widget_for_response(Gtk.ResponseType.OK).get_style_context().add_class("suggested-action")
+        d.show_all()
+        r = d.run()
+        d.destroy()
+        if r == Gtk.ResponseType.OK:
+            try:
+                Gtk.show_uri_on_window(self.win, url, Gdk.CURRENT_TIME)
+            except GLib.Error:
+                self.copy_text(url, "No se pudo abrir el navegador: enlace copiado")
+        elif r == 1:
+            self.ui["update_skip"] = info["version"]
+            T.save_ui(self.ui)
+            self.win.b_update.hide()
 
     # --- autobloqueo -----------------------------------------------------
     AUTOLOCK_DEFAULT_MIN = 15

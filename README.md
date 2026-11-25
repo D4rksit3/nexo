@@ -220,6 +220,20 @@ crear una **contraseña maestra**: cifra todo lo que guardes y **no se puede rec
 Los controladores se instalan con el paquete (recomendados). Si te falta alguno, la app te dice cuál:
 `sudo apt install python3-psycopg2 python3-pymysql python3-pymssql python3-pymongo python3-redis`.
 
+### Actualizaciones
+
+Al abrirse, y luego cada 12 horas, Nexo consulta en GitHub si hay una versión nueva. Si la hay, aparece
+el botón **«Actualización x.y.z»** en la barra superior. El aviso explica qué cambió y cómo actualizar
+según cómo lo instalaste:
+
+- **Snap:** cierra Nexo y vuelve a abrirlo, o ejecuta `sudo snap refresh nexo`.
+- **`.deb`:** trae el comando para copiar y pegar.
+- **Windows:** trae el enlace al instalador nuevo.
+
+La consulta es una petición anónima a la API pública de GitHub; no envía nada de tu bóveda ni de tu
+equipo. Se desactiva en **Ajustes → Avisarme de actualizaciones**, y **Ajustes → Buscar
+actualizaciones** la lanza a mano.
+
 ---
 
 ## 4. Montar Nexo Server para tu organización (paso a paso)
