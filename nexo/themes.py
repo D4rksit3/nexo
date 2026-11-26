@@ -114,9 +114,10 @@ def save_ui(cfg):
     os.replace(tmp, UI_CONFIG)
 
 
-def build_css(t):
+def colors(t):
+    """Colores de la interfaz derivados del tema (los usan la app GTK y la de Windows)."""
     bg, fg, acc = t["bg"], t["fg"], t["accent"]
-    c = {
+    return {
         "win": mix(bg, "#000000", 0.20),
         "side": mix(bg, "#000000", 0.35),
         "head": mix(bg, "#000000", 0.45),
@@ -134,6 +135,10 @@ def build_css(t):
         "border2": mix(bg, "#ffffff", 0.15),
         "rail": mix(bg, "#000000", 0.55),
     }
+
+
+def build_css(t):
+    c = colors(t)
     css = """
 window, .background, dialog, dialog .dialog-vbox, messagedialog, popover, popover.background,
 menu, .menu, .context-menu, stack, notebook > stack, scrolledwindow, viewport, .enlace-lock {

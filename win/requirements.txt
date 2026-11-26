@@ -1,0 +1,6 @@
+# Nexo para Windows (fase 1). Las mismas versiones en desarrollo y en el instalador.
+pywebview>=5.3
+websockets>=13.0
+paramiko>=3.4
+cryptography>=42
+pywinpty>=2.0 ; sys_platform == "win32"

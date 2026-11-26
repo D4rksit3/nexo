@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:*">
+<title>Nexo</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- bloqueo -->
+<section id="lock" class="view">
+  <form class="card" id="lock-form" autocomplete="off">
+    <img src="nexo.svg" alt="" class="logo">
+    <h1>Nexo</h1>
+    <p id="lock-msg" class="muted"></p>
+    <input type="password" id="pw1" placeholder="Contraseña maestra" autofocus>
+    <input type="password" id="pw2" placeholder="Repetir contraseña" hidden>
+    <p id="lock-err" class="err" role="alert"></p>
+    <button type="submit" class="primary" id="lock-btn">Desbloquear</button>
+    <p class="foot"><i class="ic" data-i="shield-lock"></i> Bóveda cifrada AES-256 · nada sale de este equipo</p>
+  </form>
+</section>
+
+<!-- principal -->
+<section id="main" class="view" hidden>
+  <nav class="rail">
+    <button class="rail-btn active" id="rail-hosts" title="Hosts"><i class="ic" data-i="hdd-network"></i></button>
+    <hr>
+    <button class="rail-btn" id="rail-local" title="Terminal local (Ctrl+Shift+T)"><i class="ic" data-i="terminal"></i></button>
+    <span class="grow"></span>
+    <button class="rail-btn" id="rail-lock" title="Bloquear (Ctrl+Shift+L)"><i class="ic" data-i="lock"></i></button>
+  </nav>
+
+  <aside class="side" id="side">
+    <header class="panel-head"><span>Hosts</span></header>
+    <input type="search" id="filter" placeholder="Filtrar…  (Ctrl+F)" spellcheck="false">
+    <div id="host-list" class="host-list"></div>
+  </aside>
+
+  <div class="work">
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-tab="home"><i class="ic" data-i="house"></i><span>Inicio</span></button>
+    </div>
+    <div class="panes" id="panes">
+      <div class="pane home active" data-tab="home">
+        <div class="home-inner">
+          <div class="hero">
+            <img src="nexo.svg" alt="" class="logo">
+            <div>
+              <h2>Nexo</h2>
+              <p class="muted" id="home-stats"></p>
+            </div>
+          </div>
+          <div class="section-label">RECIENTES</div>
+          <div id="recent" class="recent"></div>
+          <div class="chips">
+            <button class="chip" id="home-local"><i class="ic" data-i="terminal"></i> <span id="home-local-name">Terminal local</span></button>
+          </div>
+          <p class="hint">Doble clic en un host para conectar · Ctrl+Shift+T terminal local · Ctrl+Shift+W cerrar pestaña ·
+            Ctrl+Shift+C / V copiar y pegar · clic derecho: copia lo seleccionado o pega</p>
+          <p class="hint" id="home-version"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- contraseña de un host -->
+<dialog id="pw-dialog">
+  <form method="dialog" id="pw-form">
+    <h3 id="pw-title">Contraseña</h3>
+    <p class="muted" id="pw-sub"></p>
+    <input type="password" id="pw-host" autocomplete="off">
+    <menu>
+      <button value="cancel" formnovalidate>Cancelar</button>
+      <button value="ok" class="primary">Conectar</button>
+    </menu>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="vendor/addon-web-links.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
