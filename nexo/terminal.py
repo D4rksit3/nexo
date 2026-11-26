@@ -102,9 +102,12 @@ class TerminalPane(Gtk.Overlay):
              lambda: self.owner and self.owner.split(self, H))
         sw_host = hbtn("hosts", "Cambiar el host de este panel", lambda: None)
         sw_host.connect("clicked", self._pop_host_menu)
+        self.h_sftp = hbtn("sftp", "Archivos de este servidor: este equipo ↔ servidor (SFTP)",
+                           lambda: self.host and self.app.open_sftp(self.host))
         self.header_ev.set_no_show_all(True)
         self.header.show_all()
         self.h_bcast.hide()
+        self._sync_sftp_btn()
         body.pack_start(self.header_ev, False, False, 0)
 
         self.header_ev.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [DRAG_PANE], Gdk.DragAction.MOVE)
@@ -343,11 +346,15 @@ class TerminalPane(Gtk.Overlay):
             self.term.reset(True, False)
             self.spawn()
 
+    def _sync_sftp_btn(self):
+        self.h_sftp.set_visible(bool(self.host) and self.host.get("protocol", "ssh") == "ssh")
+
     def retarget(self, host):
         """Cambia el host de este panel (None = terminal local) y reconecta."""
         factory, title = self.app.pane_target(host)
         self.argv_factory, self.title, self.host = factory, title, host
         self.h_label.set_text(title)
+        self._sync_sftp_btn()
         from . import icons as I
         ctx = self.h_icon.get_style_context()
         for c in list(ctx.list_classes()):

@@ -65,7 +65,7 @@ UI = {
     "hosts": "hdd-network", "keys": "key", "tunnels": "arrow-left-right", "terminal": "terminal",
     "palette": "palette", "settings": "sliders", "lock": "lock", "plus": "plus-lg",
     "folder-plus": "folder-plus", "search": "search", "more": "three-dots-vertical", "play": "play-fill",
-    "sftp": "folder2-open", "chevron-down": "chevron-down", "chevron-right": "chevron-right",
+    "sftp": "folder2-open", "chevron-down": "chevron-down", "chevron-right": "chevron-right", "chevron-left": "chevron-left",
     "close": "x-lg", "split-right": "layout-split", "split-down": "window-split", "sidebar": "layout-sidebar",
     "popout": "box-arrow-up-right", "home": "house", "command": "command", "copy": "copy",
     "upload": "upload", "download": "download", "up": "arrow-up", "refresh": "arrow-clockwise",

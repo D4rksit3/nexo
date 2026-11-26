@@ -359,5 +359,8 @@ list.nx-palette-list row:selected { background-color: alpha(@acc, 0.16); color: 
 .enlace-toolbar button.suggested-action:hover { background-color: shade(@acc, 1.1); color: @acc_fg; }
 .enlace-toast { border-radius: 10px; border: 1px solid @border2; font-size: 13px; }
 paned > separator { min-width: 1px; min-height: 1px; background-color: @line; }
+.nx-files-head { padding: 10px 12px 8px 14px; background-color: @side; border-bottom: 1px solid @line; }
+paned.nx-files-split > separator { min-width: 3px; background-color: @border2; }
+paned.nx-files-split > separator:hover { background-color: alpha(@acc, 0.6); }
 paned > separator:hover { background-color: alpha(@acc, 0.45); }
 """

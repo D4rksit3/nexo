@@ -62,8 +62,9 @@ Nexo tiene dos piezas que puedes usar juntas o por separado:
 - 🔐 **Bóveda cifrada** (AES-256-GCM + scrypt) con contraseña maestra y autobloqueo.
 - 🖥️ **Terminal** con pestañas y **pantalla dividida**: arrastra una pestaña al borde de otra terminal
   para ponerla al costado.
-- 📁 **SFTP**: navega, sube y descarga archivos; los archivos remotos se editan con tu editor y se
-  suben solos al guardar.
+- 📁 **SFTP en dos paneles**: a la izquierda tus archivos, a la derecha los del servidor. Arrastra de un
+  lado a otro, o usa **Subir →** / **← Bajar**; pregunta antes de reemplazar y se puede cancelar. Los
+  archivos remotos se editan con tu editor y se suben solos al guardar.
 - 🔀 **Túneles** locales, remotos y SOCKS; **saltos** por bastión con llave o contraseña.
 - 🪟 **RDP** con FreeRDP.
 - 🗄️ **Bases de datos**: PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB y Redis, con árbol de objetos,
@@ -202,7 +203,14 @@ crear una **contraseña maestra**: cifra todo lo que guardes y **no se puede rec
 - Haz **doble clic** en un host o usa **`Ctrl+K`** y escribe su nombre.
 - **Dividir la pantalla:** arrastra una pestaña al borde izquierdo, derecho, superior o inferior de la
   terminal. También sirve `Ctrl+Shift+E` (derecha) o `Ctrl+Shift+O` (abajo).
-- **SFTP:** botón de carpeta en cada host. Los archivos que abres se suben solos al guardar.
+- **SFTP:** botón de carpeta en cada host, o en la barra de una terminal SSH abierta. Se abre en dos
+  paneles: **Este equipo** (izquierda) y el servidor (derecha).
+  - Arrastra archivos o carpetas de un panel al otro; si los sueltas sobre una carpeta, van dentro.
+  - **Subir →** (`Ctrl+→`) y **← Bajar** (`Ctrl+←`) copian la selección a la carpeta abierta del otro lado.
+  - Si algo ya existe, eliges **Reemplazar** u **Omitir existentes**. Lo que se cancela o se corta no
+    deja archivos a medias: se transfiere con nombre temporal y se renombra al terminar.
+  - En **Este equipo**, eliminar manda a la **papelera**; `Ctrl+H` muestra los ocultos.
+  - Los archivos del servidor que abres se suben solos al guardar.
 - **Ocultar el panel** y ver solo la consola: `F9`.
 
 ### Paso 5 — Bases de datos

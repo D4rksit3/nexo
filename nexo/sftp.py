@@ -1,5 +1,6 @@
 """Pestaña SFTP: navegador de archivos remoto con paramiko en un hilo aparte."""
 import hashlib
+import json
 import os
 import tempfile
 import posixpath
@@ -7,17 +8,21 @@ import queue
 import stat
 import threading
 import time
-from urllib.parse import unquote, urlparse
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from . import conn  # noqa: E402
+from .filepane import (COL_BYTES, COL_ISDIR, COL_NAME, COL_PERM, INFO_REMOTE, INFO_URIS,  # noqa: E402
+                       TARGET_REMOTE, TARGET_URIS, LocalPane, build_view, folder_under, head_label, human,
+                       new_store, row_values, selected_rows, uris_to_paths)
 
-COL_ICON, COL_NAME, COL_SIZE, COL_MTIME, COL_PERM, COL_ISDIR, COL_BYTES, COL_SORT = range(8)
+
+class Cancelled(Exception):
+    pass
 
 
 def _sha(path):
@@ -26,13 +31,6 @@ def _sha(path):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def human(n):
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024 or unit == "TB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024
 
 
 class SftpTab(Gtk.Box):
@@ -49,22 +47,37 @@ class SftpTab(Gtk.Box):
         self.alive = False
         self.editing = {}  # ruta remota -> registro de edición
 
-        # --- barra de herramientas
+        self.cancel = threading.Event()
+        self.busy = 0
+
+        from . import icons as I
+
+        # --- panel derecho: el servidor
+        remote = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        head, _ = head_label(I.image(I.host_icon(host), 14), host["name"], conn.label(host))
+        remote.pack_start(head, False, False, 0)
         bar = Gtk.Box(spacing=4)
         bar.get_style_context().add_class("enlace-toolbar")
         bar.set_border_width(6)
 
-        from . import icons as I
-
-        def btn(icon, tip, cb):
+        def btn(icon, tip, cb, end=False):
             b = Gtk.Button()
             b.add(I.ui_image(icon, 15))
             b.set_tooltip_text(tip)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.connect("clicked", lambda *_: cb())
-            bar.pack_start(b, False, False, 0)
+            (bar.pack_end if end else bar.pack_start)(b, False, False, 0)
             return b
 
+        down = Gtk.Button()
+        db = Gtk.Box(spacing=6)
+        db.pack_start(I.ui_image("chevron-left", 12), False, False, 0)
+        db.pack_start(Gtk.Label(label="Bajar"), False, False, 0)
+        down.add(db)
+        down.get_style_context().add_class("suggested-action")
+        down.set_tooltip_text("Bajar la selección a la carpeta abierta de este equipo (Ctrl+Flecha izquierda)")
+        down.connect("clicked", lambda *_: self.download_selected())
+        bar.pack_start(down, False, False, 2)
         btn("up", "Subir un nivel (Retroceso)", self.go_up)
         btn("home", "Carpeta personal", lambda: self.navigate("."))
         btn("refresh", "Actualizar (F5)", self.refresh)
@@ -72,58 +85,42 @@ class SftpTab(Gtk.Box):
         self.path_entry.set_placeholder_text("/ruta/remota")
         self.path_entry.connect("activate", lambda e: self.navigate(e.get_text().strip() or "/"))
         bar.pack_start(self.path_entry, True, True, 4)
-        btn("upload", "Subir archivos…", self.upload_dialog)
-        btn("upload-folder", "Subir carpeta…", self.upload_folder_dialog)
-        btn("download", "Descargar selección…", self.download_dialog)
-        btn("new-folder", "Nueva carpeta", self.mkdir_dialog)
-        btn("edit", "Renombrar (F2)", self.rename_dialog)
-        btn("trash", "Eliminar (Supr)", self.delete_dialog)
-        btn("terminal", "Abrir terminal SSH aquí", self.open_terminal_here)
-        self.pack_start(bar, False, False, 0)
+        btn("terminal", "Abrir terminal SSH aquí", self.open_terminal_here, end=True)
+        btn("trash", "Eliminar (Supr)", self.delete_dialog, end=True)
+        btn("edit", "Renombrar (F2)", self.rename_dialog, end=True)
+        btn("new-folder", "Nueva carpeta", self.mkdir_dialog, end=True)
+        remote.pack_start(bar, False, False, 0)
 
-        # --- lista
-        self.store = Gtk.ListStore(str, str, str, str, str, bool, GObject.TYPE_INT64, str)
-        self.store.set_sort_column_id(COL_SORT, Gtk.SortType.ASCENDING)
-        self.view = Gtk.TreeView(model=self.store)
-        self.view.set_enable_search(True)
-        self.view.set_search_column(COL_NAME)
-        self.view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
-        self.view.set_rubber_banding(True)
-
-        col = Gtk.TreeViewColumn("Nombre")
-        r_icon = Gtk.CellRendererPixbuf()
-        r_name = Gtk.CellRendererText(ellipsize=Pango.EllipsizeMode.END)
-        col.pack_start(r_icon, False)
-        col.pack_start(r_name, True)
-        col.add_attribute(r_icon, "icon-name", COL_ICON)
-        col.add_attribute(r_name, "text", COL_NAME)
-        col.set_expand(True)
-        col.set_sort_column_id(COL_SORT)
-        col.set_resizable(True)
-        self.view.append_column(col)
-        for title, idx, sort in (("Tamaño", COL_SIZE, COL_BYTES), ("Modificado", COL_MTIME, COL_MTIME),
-                                 ("Permisos", COL_PERM, COL_PERM)):
-            r = Gtk.CellRendererText()
-            if idx == COL_SIZE:
-                r.set_property("xalign", 1.0)
-            c = Gtk.TreeViewColumn(title, r, text=idx)
-            c.set_sort_column_id(sort)
-            c.set_resizable(True)
-            self.view.append_column(c)
+        self.store = new_store()
+        self.view = build_view(self.store)
         self.view.connect("row-activated", self._on_activate)
         self.view.connect("key-press-event", self._on_key)
         self.view.connect("button-press-event", self._on_button)
-
-        # arrastrar desde el gestor de archivos = subir
-        self.view.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
-        self.view.drag_dest_add_uri_targets()
+        # arrastrar desde aquí hacia «Este equipo» = bajar
+        self.view.enable_model_drag_source(
+            Gdk.ModifierType.BUTTON1_MASK,
+            [Gtk.TargetEntry.new(TARGET_REMOTE, Gtk.TargetFlags.SAME_APP, INFO_REMOTE)], Gdk.DragAction.COPY)
+        self.view.connect("drag-data-get", self._drag_get)
+        # soltar aquí archivos de «Este equipo» o del gestor de archivos = subir
+        self.view.enable_model_drag_dest([Gtk.TargetEntry.new(TARGET_URIS, 0, INFO_URIS)], Gdk.DragAction.COPY)
         self.view.connect("drag-data-received", self._on_drop)
-
         sw = Gtk.ScrolledWindow()
         sw.add(self.view)
-        self.pack_start(sw, True, True, 0)
+        remote.pack_start(sw, True, True, 0)
 
-        # --- estado
+        # --- panel izquierdo: este equipo
+        self.local = LocalPane(app, conn.REAL_HOME, on_send=self._send_from_local,
+                               on_receive=self._receive_to_local)
+
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        paned.get_style_context().add_class("nx-files-split")
+        paned.pack1(self.local, True, False)
+        paned.pack2(remote, True, False)
+        paned.connect("size-allocate", self._half_once)
+        self._split_done = False
+        self.pack_start(paned, True, True, 0)
+
+        # --- estado y transferencias
         st = Gtk.Box(spacing=8)
         st.get_style_context().add_class("enlace-statusbar")
         st.set_border_width(6)
@@ -133,7 +130,12 @@ class SftpTab(Gtk.Box):
         self.progress.set_size_request(220, -1)
         self.progress.set_valign(Gtk.Align.CENTER)
         self.progress.set_no_show_all(True)
+        self.b_cancel = Gtk.Button(label="Cancelar")
+        self.b_cancel.set_tooltip_text("Detener la transferencia en curso")
+        self.b_cancel.set_no_show_all(True)
+        self.b_cancel.connect("clicked", lambda *_: self.cancel.set())
         st.pack_start(self.status, True, True, 0)
+        st.pack_end(self.b_cancel, False, False, 0)
         st.pack_end(self.progress, False, False, 0)
         self.pack_start(st, False, False, 0)
 
@@ -141,6 +143,11 @@ class SftpTab(Gtk.Box):
         self.set_status(f"Conectando a {conn.label(host)}…")
         threading.Thread(target=self._worker, daemon=True).start()
         self.submit(self._connect, self._connected)
+
+    def _half_once(self, paned, alloc):
+        if not self._split_done and alloc.width > 100:
+            self._split_done = True
+            paned.set_position(alloc.width // 2)
 
     # --- hilo de trabajo -------------------------------------------------
     def _worker(self):
@@ -159,7 +166,14 @@ class SftpTab(Gtk.Box):
         if self.closed:
             return False
         if err is not None:
-            self.progress.hide()
+            self._transfer_end()
+            if isinstance(err, Cancelled):
+                self._note = "✖ Transferencia cancelada"
+                self.set_status(self._note)
+                self.app.toast("Transferencia cancelada")
+                self.refresh()
+                self.local.refresh()
+                return False
             msg = str(err) or type(err).__name__
             self.set_status(f"✖ {msg}")
             self.app.toast(f"SFTP {self.host['name']}: {msg}", error=True)
@@ -210,27 +224,20 @@ class SftpTab(Gtk.Box):
         path, entries = res
         self.cwd = path
         self.path_entry.set_text(path)
+        self.path_entry.set_position(-1)  # que se vea la carpeta actual, no el inicio de la ruta
         self.store.clear()
         ndirs = nfiles = 0
         for a in entries:
-            is_dir = stat.S_ISDIR(a.st_mode or 0)
-            is_link = stat.S_ISLNK(a.st_mode or 0)
-            if is_dir:
-                ndirs += 1
-                icon = "folder-symbolic"
-            else:
-                nfiles += 1
-                icon = "emblem-symbolic-link-symbolic" if is_link else "text-x-generic-symbolic"
-            size = "" if is_dir else human(a.st_size or 0)
-            mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(a.st_mtime or 0))
-            perm = stat.filemode(a.st_mode or 0)
-            sort = ("0" if is_dir else "1") + a.filename.lower()
-            self.store.append([icon, a.filename, size, mtime, perm, is_dir, a.st_size or 0, sort])
-        self.set_status(f"{path} — {ndirs} carpetas, {nfiles} archivos")
+            vals = row_values(a.filename, a.st_mode, a.st_size, a.st_mtime,
+                              is_link=stat.S_ISLNK(a.st_mode or 0))
+            ndirs, nfiles = (ndirs + 1, nfiles) if vals[COL_ISDIR] else (ndirs, nfiles + 1)
+            self.store.append(vals)
+        listing = f"{path} — {ndirs} carpetas, {nfiles} archivos"
+        note, self._note = getattr(self, "_note", None), None
+        self.set_status(f"{note}   ·   {listing}" if note else listing)
 
     def _selected(self):
-        model, paths = self.view.get_selection().get_selected_rows()
-        return [(model[p][COL_NAME], model[p][COL_ISDIR], model[p][COL_BYTES]) for p in paths]
+        return selected_rows(self.view)
 
     def _remote(self, name):
         return posixpath.join(self.cwd, name)
@@ -275,7 +282,7 @@ class SftpTab(Gtk.Box):
             return self.sftp.stat(remote)
 
         def done(st):
-            self.progress.hide()
+            self._transfer_end()
             os.chmod(local, 0o600)
             rec = {"name": name, "remote": remote, "local": local, "dir": workdir,
                    "mtime": st.st_mtime, "size": st.st_size, "hash": _sha(local),
@@ -342,7 +349,7 @@ class SftpTab(Gtk.Box):
 
         def done(res):
             rec["busy"] = False
-            self.progress.hide()
+            self._transfer_end()
             if res == "conflict":
                 self._edit_conflict(rec)
                 return
@@ -395,7 +402,7 @@ class SftpTab(Gtk.Box):
             return local
 
         def done(path):
-            self.progress.hide()
+            self._transfer_end()
             self.set_status(f"Abierto {name} (copia local de solo lectura)")
             Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(path), None)
 
@@ -415,6 +422,9 @@ class SftpTab(Gtk.Box):
         if k == Gdk.KEY_F2:
             self.rename_dialog()
             return True
+        if k == Gdk.KEY_Left and ev.state & Gdk.ModifierType.CONTROL_MASK:
+            self.download_selected()
+            return True
         return False
 
     def _on_button(self, view, ev):
@@ -430,12 +440,14 @@ class SftpTab(Gtk.Box):
         for text, cb, needs in (
             ("Editar (se sube al guardar)", self._edit_selected, 1),
             ("Abrir copia de solo lectura", lambda: self.open_file(self._selected()[0][0]), 1),
-            ("Descargar…", self.download_dialog, 1),
+            ("←  Bajar a este equipo", self.download_selected, 1),
+            ("Descargar en otra carpeta…", self.download_dialog, 1),
             ("Renombrar…", self.rename_dialog, 1),
             ("Eliminar…", self.delete_dialog, 1),
             ("Copiar ruta", self.copy_path, 0),
             (None, None, 0),
             ("Subir archivos aquí…", self.upload_dialog, 0),
+            ("Subir carpeta aquí…", self.upload_folder_dialog, 0),
             ("Nueva carpeta…", self.mkdir_dialog, 0),
             ("Actualizar", self.refresh, 0),
         ):
@@ -460,59 +472,208 @@ class SftpTab(Gtk.Box):
     # --- transferencias --------------------------------------------------
     def _progress_cb(self, label):
         last = [0.0]
+        t0 = time.time()
 
         def cb(done, total):
+            if self.cancel.is_set():
+                raise Cancelled()
             now = time.time()
-            if now - last[0] < 0.1 and done < total:
+            if now - last[0] < 0.12 and done < total:
                 return
             last[0] = now
             frac = done / total if total else 1
-            GLib.idle_add(self._set_progress, frac, f"{label}: {human(done)} / {human(total)}")
+            speed = done / max(now - t0, 0.001)
+            rate = f" · {human(speed)}/s" if now - t0 > 0.5 else ""
+            GLib.idle_add(self._set_progress, frac, f"{label}: {human(done)} / {human(total)}{rate}")
 
         return cb
 
     def _set_progress(self, frac, text):
         self.progress.show()
+        self.b_cancel.show()
         self.progress.set_fraction(frac)
         self.set_status(text)
         return False
 
-    def _upload_paths(self, paths):
+    def _transfer_start(self):
+        self.cancel.clear()
+        self.busy += 1
+        self.b_cancel.show()
+
+    def _transfer_end(self):
+        self.busy = max(0, self.busy - 1)
+        if not self.busy:
+            self.progress.hide()
+            self.b_cancel.hide()
+
+    def _ask_overwrite(self, names, where):
+        """None = cancelar, True = reemplazar, False = omitir los existentes."""
+        if not names:
+            return True
+        shown = ", ".join(sorted(names)[:5]) + ("…" if len(names) > 5 else "")
+        d = Gtk.MessageDialog(transient_for=self.app.win, modal=True, message_type=Gtk.MessageType.QUESTION,
+                              buttons=Gtk.ButtonsType.NONE,
+                              text=f"{len(names)} elemento(s) ya existen en {where}")
+        d.format_secondary_text(f"{shown}\n\nLas carpetas se combinan; los archivos con el mismo nombre se reemplazan.")
+        d.add_buttons("Cancelar", Gtk.ResponseType.CANCEL, "Omitir existentes", 1, "Reemplazar", Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.OK)
+        r = d.run()
+        d.destroy()
+        return {Gtk.ResponseType.OK: True, 1: False}.get(r)
+
+    # subir: este equipo -> servidor
+    def _send_from_local(self, paths, sub=None):
+        if not self.sftp or not self.cwd:
+            self.app.toast("Todavía no hay conexión con el servidor")
+            return
+        self._upload_paths(paths, posixpath.join(self.cwd, sub) if sub else self.cwd)
+
+    def _upload_paths(self, paths, dest=None):
         if not self.cwd:
             return
-        dest = self.cwd
+        dest = dest or self.cwd
+        paths = [p for p in paths if os.path.exists(p)]
+        if not paths:
+            return
 
-        def put_tree(local, remote):
+        def existing():
+            return set(self.sftp.listdir(dest))
+
+        def decide(names_there):
+            clash = {os.path.basename(p.rstrip("/")) for p in paths} & names_there
+            choice = self._ask_overwrite(clash, f"{self.host['name']}:{dest}")
+            if choice is None:
+                return
+            todo = [p for p in paths if choice or os.path.basename(p.rstrip("/")) not in clash]
+            if todo:
+                self._do_upload(todo, dest)
+
+        self.submit(existing, decide)
+
+    def _do_upload(self, paths, dest):
+        n = len(paths)
+        count = [0]
+
+        def put_tree(local, remote, i):
+            if self.cancel.is_set():
+                raise Cancelled()
             if os.path.isdir(local):
                 try:
                     self.sftp.mkdir(remote)
                 except OSError:
                     pass
                 for name in sorted(os.listdir(local)):
-                    put_tree(os.path.join(local, name), posixpath.join(remote, name))
+                    put_tree(os.path.join(local, name), posixpath.join(remote, name), i)
             elif os.path.isfile(local):
-                self.sftp.put(local, remote, callback=self._progress_cb(f"Subiendo {os.path.basename(local)}"))
+                tag = f"↑ {os.path.basename(local)}" + (f" ({i}/{n})" if n > 1 else "")
+                part = remote + ".nexo-parcial"
+                try:
+                    self.sftp.put(local, part, callback=self._progress_cb(tag))
+                    self._replace_remote(part, remote)  # nunca deja un archivo a medias con el nombre final
+                except BaseException:
+                    try:
+                        self.sftp.remove(part)
+                    except OSError:
+                        pass
+                    raise
+                count[0] += 1
 
         def job():
-            for p in paths:
-                put_tree(p, posixpath.join(dest, os.path.basename(p.rstrip("/"))))
-            return len(paths)
+            for i, p in enumerate(paths, 1):
+                put_tree(p, posixpath.join(dest, os.path.basename(p.rstrip("/"))), i)
+            return count[0]
 
-        def done(n):
-            self.progress.hide()
-            self.app.toast(f"Subidos {n} elemento(s) a {dest}")
+        def done(files):
+            self._transfer_end()
+            msg = f"↑ {files} archivo(s) subidos a {self.host['name']}:{dest}"
+            self._note = msg
+            self.set_status(msg)
+            self.app.toast(msg)
             self.refresh()
 
+        self._transfer_start()
         self.submit(job, done)
 
+    def _replace_remote(self, src, dst):
+        try:
+            self.sftp.posix_rename(src, dst)          # reemplaza en un paso (OpenSSH)
+        except OSError:
+            try:
+                self.sftp.remove(dst)
+            except OSError:
+                pass
+            self.sftp.rename(src, dst)
+
+    # bajar: servidor -> este equipo
+    def download_selected(self):
+        sel = self._selected()
+        if not sel:
+            self.app.toast("Selecciona archivos o carpetas del servidor para bajar")
+            return
+        self._receive_to_local(sel, self.cwd, self.local.cwd)
+
+    def _receive_to_local(self, items, src, dest):
+        if not self.sftp:
+            return
+        items = [tuple(x) for x in items]
+        clash = {name for name, *_ in items if os.path.exists(os.path.join(dest, name))}
+        choice = self._ask_overwrite(clash, dest)
+        if choice is None:
+            return
+        todo = [x for x in items if choice or x[0] not in clash]
+        if todo:
+            self._do_download(todo, src, dest)
+
+    def _do_download(self, items, src, dest):
+        n = len(items)
+        count = [0]
+
+        def get_tree(remote, local, is_dir, i):
+            if self.cancel.is_set():
+                raise Cancelled()
+            if is_dir:
+                os.makedirs(local, exist_ok=True)
+                for a in self.sftp.listdir_attr(remote):
+                    get_tree(posixpath.join(remote, a.filename), os.path.join(local, a.filename),
+                             stat.S_ISDIR(a.st_mode or 0), i)
+            else:
+                tag = f"↓ {posixpath.basename(remote)}" + (f" ({i}/{n})" if n > 1 else "")
+                part = local + ".nexo-parcial"
+                try:
+                    self.sftp.get(remote, part, callback=self._progress_cb(tag))
+                    os.replace(part, local)  # nunca deja un archivo a medias con el nombre final
+                finally:
+                    if os.path.exists(part):
+                        os.unlink(part)
+                count[0] += 1
+
+        def job():
+            for i, (name, is_dir, _size) in enumerate(items, 1):
+                get_tree(posixpath.join(src, name), os.path.join(dest, name), is_dir, i)
+            return count[0]
+
+        def done(files):
+            self._transfer_end()
+            msg = f"↓ {files} archivo(s) bajados a {dest}"
+            self._note = msg
+            self.set_status(msg)
+            self.app.toast(msg)
+            if self.local.cwd == dest or os.path.dirname(dest) == self.local.cwd:
+                self.local.refresh()
+
+        self._transfer_start()
+        self.submit(job, done)
+
+    def _drag_get(self, view, ctx, data, info, time_):
+        payload = {"dir": self.cwd, "items": self._selected()}
+        data.set(Gdk.Atom.intern(TARGET_REMOTE, False), 8, json.dumps(payload).encode())
+
     def _on_drop(self, widget, ctx, x, y, data, info, time_):
-        paths = []
-        for uri in data.get_uris() or []:
-            u = urlparse(uri)
-            if u.scheme == "file":
-                paths.append(unquote(u.path))
+        paths = uris_to_paths(data.get_uris())
         if paths:
-            self._upload_paths(paths)
+            sub = folder_under(self.view, x, y)
+            self._upload_paths(paths, posixpath.join(self.cwd, sub) if sub and self.cwd else None)
+        Gtk.drag_finish(ctx, bool(paths), False, time_)
 
     def _chooser(self, title, action, multiple=False):
         d = Gtk.FileChooserNative.new(title, self.app.win, action, None, None)
@@ -542,31 +703,8 @@ class SftpTab(Gtk.Box):
             self.app.toast("Selecciona archivos o carpetas para descargar")
             return
         dirs = self._chooser("Descargar en…", Gtk.FileChooserAction.SELECT_FOLDER)
-        if not dirs:
-            return
-        dest = dirs[0]
-        src = self.cwd
-
-        def get_tree(remote, local, is_dir):
-            if is_dir:
-                os.makedirs(local, exist_ok=True)
-                for a in self.sftp.listdir_attr(remote):
-                    get_tree(posixpath.join(remote, a.filename), os.path.join(local, a.filename),
-                             stat.S_ISDIR(a.st_mode or 0))
-            else:
-                self.sftp.get(remote, local, callback=self._progress_cb(f"Descargando {posixpath.basename(remote)}"))
-
-        def job():
-            for name, is_dir, _ in sel:
-                get_tree(posixpath.join(src, name), os.path.join(dest, name), is_dir)
-            return len(sel)
-
-        def done(n):
-            self.progress.hide()
-            self.set_status(f"Descargados {n} elemento(s) en {dest}")
-            self.app.toast(f"Descargados {n} elemento(s) en {dest}")
-
-        self.submit(job, done)
+        if dirs:
+            self._receive_to_local(sel, self.cwd, dirs[0])
 
     # --- operaciones -----------------------------------------------------
     def _ask(self, title, text="", ok="Aceptar"):
@@ -642,6 +780,7 @@ class SftpTab(Gtk.Box):
 
     def close(self):
         self.closed = True
+        self.cancel.set()
         for rec in self.editing.values():
             rec["monitor"].cancel()
             if rec["timer"]:
