@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <a href="https://snapcraft.io/nexo">
+    <img alt="Disponible en la Snap Store" src="https://snapcraft.io/static/images/badges/es/snap-store-black.svg">
+  </a>
+</p>
+
+<p align="center">
   <img src="docs/img/nexo-todo-en-uno.png" alt="Nexo: todas las funciones en una imagen" width="960">
 </p>
 
@@ -124,6 +130,10 @@ sudo apt install ./dist/nexo_*_all.deb
 ```
 
 **Opción B2: Snap (App Center de Ubuntu)**
+
+<a href="https://snapcraft.io/nexo">
+  <img alt="Disponible en la Snap Store" src="https://snapcraft.io/static/images/badges/es/snap-store-black.svg">
+</a>
 
 ```bash
 sudo snap install nexo
