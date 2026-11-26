@@ -14,6 +14,7 @@ from . import __version__
 
 REPO = "D4rksit3/nexo"
 LATEST_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 CHECK_EVERY_S = 12 * 3600
 
@@ -38,20 +39,59 @@ def install_kind():
     return "source"
 
 
-def fetch_latest(timeout=8):
-    """Devuelve {'version', 'url', 'notes', 'assets'} de la última versión publicada."""
-    req = urllib.request.Request(LATEST_API, headers={
+def _get(url, timeout):
+    req = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": f"Nexo/{__version__}",
     })
     with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (URL fija https)
-        data = json.load(r)
+        return json.load(r)
+
+
+def _release(data):
     return {
         "version": (data.get("tag_name") or "").lstrip("vV"),
         "url": data.get("html_url") or RELEASES_PAGE,
         "notes": data.get("body") or "",
         "assets": {a["name"]: a["browser_download_url"] for a in data.get("assets", [])},
+        "date": (data.get("published_at") or "")[:10],
+        "prerelease": bool(data.get("prerelease")),
     }
+
+
+def fetch_latest(timeout=8):
+    """Devuelve {'version', 'url', 'notes', 'assets', 'date'} de la última versión publicada."""
+    return _release(_get(LATEST_API, timeout))
+
+
+def fetch_releases(timeout=8):
+    """Todas las versiones publicadas (sin borradores), de la más nueva a la más vieja."""
+    out = [_release(d) for d in _get(RELEASES_API, timeout) if not d.get("draft")]
+    out = [r for r in out if r["version"]]
+    out.sort(key=lambda r: parse(r["version"]), reverse=True)
+    return out
+
+
+def releases_async(callback):
+    """Como check_async, pero con la lista completa: callback(lista | None, error | None)."""
+    def run():
+        try:
+            callback(fetch_releases(), None)
+        except Exception as e:  # noqa: BLE001
+            callback(None, e)
+    threading.Thread(target=run, name="nexo-releases", daemon=True).start()
+
+
+MONTHS = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+
+
+def nice_date(iso):
+    """'2026-11-25' -> '25 nov 2026'."""
+    try:
+        y, m, d = (int(x) for x in iso.split("-"))
+        return f"{d} {MONTHS[m - 1]} {y}"
+    except (ValueError, IndexError):
+        return iso
 
 
 def check_async(callback):
@@ -83,22 +123,40 @@ def summary(notes, limit=6):
 
 
 def instructions(info):
-    """(texto, comando_para_copiar | None, url_para_abrir) según el tipo de instalación."""
+    """(texto, comando_para_copiar | None, url_para_abrir) según el tipo de instalación.
+
+    Sirve para la versión nueva y también para volver a una anterior.
+    """
     v = info["version"]
+    older = parse(v) < parse(__version__)
     kind = install_kind()
     assets = info.get("assets", {})
     if kind == "snap":
+        if older:
+            return ("La tienda de snaps instala siempre la última versión. Para volver a la que "
+                    "tenías justo antes de la última actualización:",
+                    "sudo snap revert nexo", info["url"])
         return ("Nexo se actualiza solo desde la tienda. Cierra Nexo y vuelve a abrirlo; "
                 "si todavía no se aplicó, ejecútalo ya en una terminal:",
                 "sudo snap refresh nexo", info["url"])
     if kind == "windows":
         exe = assets.get(f"NexoSetup-{v}.exe")
-        return ("Descarga el instalador nuevo y ejecútalo. Tu bóveda se conserva.",
+        return ("Descarga el instalador de esta versión y ejecútalo. Tu bóveda se conserva.",
                 None, exe or info["url"])
     deb_name = f"nexo_{v}_all.deb"
     deb = assets.get(deb_name)
-    if kind == "deb" and deb:
-        cmd = f"cd /tmp && wget -q {deb} && sudo apt install -y ./{deb_name}"
-        return ("Descarga e instala el paquete nuevo con este comando. Tu bóveda se conserva.",
-                cmd, info["url"])
-    return ("Descarga la versión nueva desde la página de la versión.", None, info["url"])
+    if kind in ("deb", "source") and deb:
+        flag = " --allow-downgrades" if older else ""
+        what = "esta versión anterior" if older else "el paquete nuevo"
+        cmd = f"cd /tmp && wget -q {deb} && sudo apt install -y{flag} ./{deb_name}"
+        return (f"Descarga e instala {what} con este comando. Tu bóveda se conserva.", cmd, info["url"])
+    return ("Descarga esta versión desde su página en GitHub.", None, info["url"])
+
+
+def downloads(info):
+    """[(etiqueta, url)] de los archivos que sirven en este equipo, para descarga directa."""
+    v, assets = info["version"], info.get("assets", {})
+    kind = install_kind()
+    want = [(f"NexoSetup-{v}.exe", "Instalador .exe"), (f"nexo-windows-{v}.zip", ".zip")] if kind == "windows" \
+        else [(f"nexo_{v}_all.deb", "Paquete .deb")]
+    return [(lbl, assets[name]) for name, lbl in want if name in assets]

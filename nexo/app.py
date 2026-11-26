@@ -24,6 +24,7 @@ from . import dbclient as DBC  # noqa: E402
 from .sftp import SftpTab  # noqa: E402
 from .sidebar import GroupSection  # noqa: E402
 from . import themes as T  # noqa: E402
+from .asciibg import AsciiBackdrop  # noqa: E402
 from . import updates as U  # noqa: E402
 from .terminal import DRAG_HOST, DRAG_PANE, DRAG_TAB, SplitTab, TerminalPane  # noqa: E402
 from .widgets import AccentDot, ThemeCard  # noqa: E402
@@ -103,6 +104,9 @@ class Window(Gtk.ApplicationWindow):
         menu.append("Importar hosts de ~/.ssh/config", "app.import-config")
         menu.append("Cambiar contraseña maestra", "app.change-password")
         menu.append("Autobloqueo…", "app.autolock")
+        look = Gio.Menu()
+        look.append("Fondo animado (ASCII)", "app.ascii-bg")
+        menu.append_section(None, look)
         upd = Gio.Menu()
         upd.append("Buscar actualizaciones", "app.check-updates")
         upd.append("Avisarme de actualizaciones", "app.update-notify")
@@ -242,7 +246,12 @@ class Window(Gtk.ApplicationWindow):
         fl.get_style_context().add_class("nx-caption")
         foot.pack_start(fl, False, False, 0)
         card.pack_start(foot, False, False, 0)
-        return card
+        ov = Gtk.Overlay()
+        ov.get_style_context().add_class("enlace-lock")
+        self.lock_bg = AsciiBackdrop(self.app, focus=card)
+        ov.add(self.lock_bg)
+        ov.add_overlay(card)
+        return ov
 
     def show_lock(self):
         creating = not self.app.vault.exists()
@@ -338,6 +347,15 @@ class Window(Gtk.ApplicationWindow):
         lt.get_style_context().add_class("nx-rail-btn")
         lt.connect("clicked", lambda *_: self.app.open_local())
         rail.pack_start(lt, False, False, 0)
+        # versiones: abajo del todo, aparte de las herramientas
+        vb = Gtk.ToggleButton()
+        vb.add(I.ui_image("releases", 18))
+        vb.set_tooltip_text("Versiones y actualizaciones")
+        vb.set_relief(Gtk.ReliefStyle.NONE)
+        vb.get_style_context().add_class("nx-rail-btn")
+        vb.connect("button-release-event", lambda w, e: (self.app.show_panel("releases"), True)[1])
+        rail.pack_end(vb, False, False, 0)
+        self.rail_buttons["releases"] = vb
         return rail
 
     def sync_rail(self):
@@ -418,6 +436,26 @@ class Window(Gtk.ApplicationWindow):
         s3.add(self.tun_list)
         tb.pack_start(s3, True, True, 0)
         self.side_stack.add_titled(tb, "tunnels", "Túneles")
+
+        # versiones publicadas en GitHub
+        rb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        rb.pack_start(self._panel_header("Versiones", [
+            ("github", "Abrir las versiones en GitHub", lambda: self.app.open_url(U.RELEASES_PAGE.rsplit("/", 1)[0])),
+            ("refresh", "Buscar versiones nuevas", lambda: self.app.load_releases(manual=True)),
+        ]), False, False, 0)
+        self.rel_status = Gtk.Label(xalign=0, wrap=True)
+        self.rel_status.get_style_context().add_class("nx-caption")
+        self.rel_status.set_margin_start(16)
+        self.rel_status.set_margin_end(16)
+        self.rel_status.set_margin_bottom(8)
+        rb.pack_start(self.rel_status, False, False, 0)
+        self.rel_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.rel_list.get_style_context().add_class("nx-releases")
+        self.rel_list.set_placeholder(self._empty("Cargando versiones…", "Se consultan en GitHub"))
+        s4 = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        s4.add(self.rel_list)
+        rb.pack_start(s4, True, True, 0)
+        self.side_stack.add_titled(rb, "releases", "Versiones")
 
         self.side = side
         paned.pack1(side, False, False)
@@ -515,8 +553,12 @@ class Window(Gtk.ApplicationWindow):
 
         sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         sw.add(col)
+        self.welcome_bg = AsciiBackdrop(self.app, focus=col)
+        ov = Gtk.Overlay()
+        ov.add(self.welcome_bg)
+        ov.add_overlay(sw)
         outer = Gtk.EventBox()
-        outer.add(sw)
+        outer.add(ov)
         outer.get_style_context().add_class("nx-welcome")
         outer.drag_dest_set(Gtk.DestDefaults.ALL, [DRAG_HOST], Gdk.DragAction.COPY)
         outer.connect("drag-data-received", lambda w, ctx, x, y, data, info, t: self._welcome_drop(data))
@@ -1085,10 +1127,27 @@ class NexoApp(Gtk.Application):
                                           GLib.Variant.new_boolean(self.ui.get("update_check", True)))
         a.connect("change-state", self._toggle_update_notify)
         self.add_action(a)
+        a = Gio.SimpleAction.new_stateful("ascii-bg", None, GLib.Variant.new_boolean(self.ui.get("ascii_bg", True)))
+        a.connect("change-state", self._toggle_ascii_bg)
+        self.add_action(a)
         self._setup_autolock()
         self.update_info = None
+        self.releases = None
+        self.releases_at = 0.0
+        self.releases_loading = False
         GLib.timeout_add_seconds(4, lambda: self.check_updates() and False)
         GLib.timeout_add_seconds(U.CHECK_EVERY_S, lambda: self.check_updates() or True)
+
+    def _toggle_ascii_bg(self, action, value):
+        action.set_state(value)
+        self.ui["ascii_bg"] = value.get_boolean()
+        try:
+            T.save_ui(self.ui)
+        except OSError:
+            pass
+        if self.win:
+            for bg in (self.win.welcome_bg, self.win.lock_bg):
+                bg.refresh()
 
     # --- actualizaciones -------------------------------------------------
     def _toggle_update_notify(self, action, value):
@@ -1117,7 +1176,7 @@ class NexoApp(Gtk.Application):
             if manual:
                 self.toast(f"Estás al día: Nexo {__version__} es la última versión")
             return False
-        self.update_info = info
+        self._mark_update(info)
         skipped = self.ui.get("update_skip") == info["version"]
         if self.win and (manual or not skipped):
             self.win.update_lbl.set_text(f"Actualización {info['version']}")
@@ -1127,20 +1186,22 @@ class NexoApp(Gtk.Application):
             self.show_update()
         return False
 
-    def show_update(self):
-        info = self.update_info
+    def show_update(self, info=None):
+        info = info or self.update_info
         if not info:
             return
+        is_new = U.newer(info["version"])
         text, cmd, url = U.instructions(info)
-        d = Gtk.Dialog(title="Actualización disponible", transient_for=self.win, modal=True)
+        d = Gtk.Dialog(title="Actualización disponible" if is_new else f"Nexo {info['version']}",
+                       transient_for=self.win, modal=True)
         d.set_default_size(520, -1)
         box = d.get_content_area()
         box.set_spacing(10)
         for m in ("start", "end", "top", "bottom"):
             getattr(box, f"set_margin_{m}")(18)
         t = Gtk.Label(xalign=0)
-        t.set_markup(f"<b>Nexo {GLib.markup_escape_text(info['version'])}</b> está disponible "
-                     f"(tienes la {__version__}).")
+        t.set_markup(f"<b>Nexo {GLib.markup_escape_text(info['version'])}</b> "
+                     + ("está disponible" if is_new else "es anterior a la tuya") + f" (tienes la {__version__}).")
         t.get_style_context().add_class("nx-dialog-title")
         box.pack_start(t, False, False, 0)
         notes = U.summary(info.get("notes", ""))
@@ -1162,8 +1223,9 @@ class NexoApp(Gtk.Application):
             cb.connect("clicked", lambda *_: self.copy_text(cmd, "Comando copiado"))
             row.pack_start(cb, False, False, 0)
             box.pack_start(row, False, False, 0)
-        d.add_button("Omitir esta versión", 1)
-        d.add_button("Ahora no", Gtk.ResponseType.CLOSE)
+        if is_new:
+            d.add_button("Omitir esta versión", 1)
+        d.add_button("Ahora no" if is_new else "Cerrar", Gtk.ResponseType.CLOSE)
         d.add_button("Descargar" if U.install_kind() == "windows" else "Ver novedades", Gtk.ResponseType.OK)
         d.set_default_response(Gtk.ResponseType.OK)
         d.get_widget_for_response(Gtk.ResponseType.OK).get_style_context().add_class("suggested-action")
@@ -1171,14 +1233,143 @@ class NexoApp(Gtk.Application):
         r = d.run()
         d.destroy()
         if r == Gtk.ResponseType.OK:
-            try:
-                Gtk.show_uri_on_window(self.win, url, Gdk.CURRENT_TIME)
-            except GLib.Error:
-                self.copy_text(url, "No se pudo abrir el navegador: enlace copiado")
+            self.open_url(url)
         elif r == 1:
             self.ui["update_skip"] = info["version"]
             T.save_ui(self.ui)
             self.win.b_update.hide()
+
+    def open_url(self, url):
+        try:
+            Gtk.show_uri_on_window(self.win, url, Gdk.CURRENT_TIME)
+        except GLib.Error:
+            self.copy_text(url, "No se pudo abrir el navegador: enlace copiado")
+
+    # --- panel de versiones ------------------------------------------------
+    RELEASES_TTL_S = 15 * 60
+
+    def load_releases(self, manual=False):
+        """Pide la lista a GitHub (en un hilo) si no la hay o ya es vieja."""
+        fresh = self.releases is not None and time.monotonic() - self.releases_at < self.RELEASES_TTL_S
+        if self.releases_loading or (fresh and not manual):
+            return
+        self.releases_loading = True
+        if self.win:
+            self.win.rel_status.set_text("Consultando GitHub…")
+
+        def done(rels, err):
+            GLib.idle_add(lambda: self._on_releases(rels, err, manual) and False)
+        U.releases_async(done)
+
+    def _on_releases(self, rels, err, manual):
+        self.releases_loading = False
+        if err or rels is None:
+            if self.win:
+                self.win.rel_status.set_text("No se pudo consultar GitHub (¿sin conexión?). "
+                                             "Prueba de nuevo con ⟳.")
+            if manual:
+                self.toast("No se pudo consultar las versiones", error=True)
+            return False
+        self.releases, self.releases_at = rels, time.monotonic()
+        newest = next((r for r in rels if not r["prerelease"]), None)
+        if newest and U.newer(newest["version"]):
+            self._mark_update(newest)
+        self._fill_releases()
+        if manual:
+            self.toast("Versiones actualizadas")
+        return False
+
+    def _mark_update(self, info):
+        self.update_info = info
+        if not self.win:
+            return
+        ctx = self.win.rail_buttons["releases"].get_style_context()
+        ctx.add_class("nx-rail-alert")
+        self.win.rail_buttons["releases"].set_tooltip_text(
+            f"Versiones y actualizaciones — hay una nueva: {info['version']}")
+
+    def _fill_releases(self):
+        w = self.win
+        if not w:
+            return
+        for child in w.rel_list.get_children():
+            w.rel_list.remove(child)
+        kinds = {"snap": "snap (App Center)", "deb": "paquete .deb", "windows": "Windows (WSL)",
+                 "source": "código fuente"}
+        newer = [r for r in self.releases if U.newer(r["version"]) and not r["prerelease"]]
+        state = (f"Hay {len(newer)} versión nueva" + ("s" if len(newer) > 1 else "") if newer
+                 else "Estás al día")
+        w.rel_status.set_text(f"Tienes la {__version__} · {kinds.get(U.install_kind(), '')}.  {state}.")
+        if not self.releases:
+            w.rel_list.set_placeholder(self._empty_releases())
+        for r in self.releases:
+            w.rel_list.add(self._release_row(r))
+        w.rel_list.show_all()
+
+    def _empty_releases(self):
+        return self.win._empty("Sin versiones publicadas", "Todavía no hay versiones en GitHub")
+
+    def _release_row(self, r):
+        v = r["version"]
+        cmp = (U.parse(v) > U.parse(__version__)) - (U.parse(v) < U.parse(__version__))
+        row = Gtk.ListBoxRow(activatable=False)
+        row.get_style_context().add_class("nx-release")
+        if cmp > 0:
+            row.get_style_context().add_class("is-new")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        top = Gtk.Box(spacing=8)
+        name = Gtk.Label(xalign=0)
+        name.set_markup(f"<b>Nexo {GLib.markup_escape_text(v)}</b>")
+        top.pack_start(name, False, False, 0)
+        tag_text, tag_cls = (("Nueva", "new") if cmp > 0 else ("Instalada", "current") if cmp == 0
+                             else ("Anterior", "old"))
+        if r["prerelease"]:
+            tag_text, tag_cls = "Pre-release", "pre"
+        tag = Gtk.Label(label=tag_text)
+        tag.get_style_context().add_class("nx-tag")
+        tag.get_style_context().add_class(f"nx-tag-{tag_cls}")
+        top.pack_start(tag, False, False, 0)
+        date = Gtk.Label(label=U.nice_date(r["date"]), xalign=1)
+        date.get_style_context().add_class("nx-caption")
+        top.pack_end(date, False, False, 0)
+        box.pack_start(top, False, False, 0)
+
+        notes = U.summary(r.get("notes", ""), limit=5 if cmp > 0 else 3)
+        if notes:
+            nl = Gtk.Label(xalign=0, wrap=True, max_width_chars=34)
+            nl.set_text("\n".join(f"•  {n}" for n in notes))
+            nl.get_style_context().add_class("nx-release-notes")
+            box.pack_start(nl, False, False, 0)
+
+        acts = Gtk.Box(spacing=6)
+        acts.set_margin_top(4)
+        if cmp != 0:
+            b = Gtk.Button(label="Actualizar" if cmp > 0 else "Volver a esta")
+            b.get_style_context().add_class("nx-chip")
+            if cmp > 0:
+                b.get_style_context().add_class("suggested-action")
+            b.connect("clicked", lambda *_: self.show_update(r))
+            acts.pack_start(b, False, False, 0)
+        if U.install_kind() != "snap":
+            for lbl, url in U.downloads(r):
+                d = Gtk.Button()
+                db = Gtk.Box(spacing=5)
+                db.pack_start(I.ui_image("download", 12), False, False, 0)
+                db.pack_start(Gtk.Label(label=lbl), False, False, 0)
+                d.add(db)
+                d.set_tooltip_text(f"Descargar {url.rsplit('/', 1)[-1]}")
+                d.get_style_context().add_class("nx-chip")
+                d.connect("clicked", lambda *_a, u=url: self.open_url(u))
+                acts.pack_start(d, False, False, 0)
+        gh = Gtk.Button()
+        gh.add(I.ui_image("github", 13))
+        gh.set_tooltip_text("Ver esta versión en GitHub")
+        gh.get_style_context().add_class("nx-flat")
+        gh.connect("clicked", lambda *_: self.open_url(r["url"]))
+        acts.pack_end(gh, False, False, 0)
+        box.pack_start(acts, False, False, 0)
+        row.add(box)
+        return row
 
     # --- autobloqueo -----------------------------------------------------
     AUTOLOCK_DEFAULT_MIN = 15
@@ -1574,6 +1765,8 @@ class NexoApp(Gtk.Application):
             w.side_stack.set_visible_child_name(page)
             if not w.b_side.get_active():
                 w.b_side.set_active(True)
+            if page == "releases":
+                self.load_releases()
         w.sync_rail()
 
     def open_palette(self):

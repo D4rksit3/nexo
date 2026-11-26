@@ -240,6 +240,14 @@ según cómo lo instalaste:
 - **`.deb`:** trae el comando para copiar y pegar.
 - **Windows:** trae el enlace al instalador nuevo.
 
+**Panel «Versiones»** (el cohete al pie de la barra lateral; se ilumina cuando hay algo nuevo): lista
+todas las versiones publicadas en GitHub con su fecha y novedades, y marca cuál tienes instalada.
+
+- **Nueva:** botón **Actualizar** con el comando para tu tipo de instalación.
+- **Anterior:** **Volver a esta**, por si una versión te da problemas (en `.deb` usa `--allow-downgrades`;
+  en snap, `sudo snap revert nexo`).
+- Si instalaste desde GitHub, cada versión trae su **descarga directa** (`.deb`, o `.exe`/`.zip` en Windows).
+
 La consulta es una petición anónima a la API pública de GitHub; no envía nada de tu bóveda ni de tu
 equipo. Se desactiva en **Ajustes → Avisarme de actualizaciones**, y **Ajustes → Buscar
 actualizaciones** la lanza a mano.

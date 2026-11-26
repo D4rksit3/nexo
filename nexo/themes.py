@@ -263,6 +263,21 @@ button.nx-rail-btn { min-width: 36px; min-height: 36px; border-radius: 8px; colo
                      border: none; box-shadow: none; }
 button.nx-rail-btn:hover { color: @fg; background-color: alpha(@fg, 0.06); }
 button.nx-rail-btn:checked { color: @acc; background-color: alpha(@acc, 0.14); }
+button.nx-rail-btn.nx-rail-alert { color: @acc; }
+button.nx-rail-btn.nx-rail-alert:not(:checked) { background-color: alpha(@acc, 0.08); }
+
+list.nx-releases { background: transparent; }
+list.nx-releases row.nx-release { padding: 12px 14px; margin: 4px 10px; border-radius: 10px;
+                                  background-color: @surf; border: 1px solid @line; }
+list.nx-releases row.nx-release.is-new { border-color: alpha(@acc, 0.55); background-color: alpha(@acc, 0.06); }
+.nx-release-notes { color: @dim; font-size: 12px; }
+.nx-tag { font-size: 10.5px; font-weight: 600; border-radius: 999px; padding: 1px 8px; }
+.nx-tag-new { color: @acc_fg; background-color: @acc; }
+.nx-tag-current { color: @acc; background-color: alpha(@acc, 0.14); }
+.nx-tag-old { color: @dim; background-color: alpha(@fg, 0.06); }
+.nx-tag-pre { color: @dim; border: 1px dashed @border2; }
+list.nx-releases button.nx-chip { padding: 3px 10px; font-size: 12px; }
+list.nx-releases button.nx-chip.suggested-action { background-color: @acc; color: @acc_fg; border-color: @acc; }
 
 .enlace-sidebar { background-color: @side; border-right: 1px solid @line; }
 .nx-panel-header { padding: 12px 8px 6px 16px; }
@@ -301,7 +316,8 @@ button.nx-tab-close:hover { background-color: alpha(@fg, 0.12); opacity: 1; }
 .enlace-pane-header button { opacity: 0.55; }
 .enlace-pane-header button:hover { opacity: 1; }
 
-.nx-welcome, .nx-welcome scrolledwindow, .nx-welcome viewport { background-color: @term; }
+.nx-welcome { background-color: @term; }
+.nx-welcome scrolledwindow, .nx-welcome viewport { background-color: transparent; }
 .nx-hero-title { font-size: 26px; font-weight: 700; letter-spacing: -0.6px; }
 .nx-muted { color: @dim; }
 .nx-mono { font-family: "JetBrains Mono", monospace; font-size: 12px; }

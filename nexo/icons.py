@@ -73,7 +73,7 @@ UI = {
     "shield": "shield-lock", "bolt": "lightning-charge", "plug": "plug", "recent": "clock-history",
     "import": "box-arrow-in-right", "new-folder": "folder-plus", "upload-folder": "file-earmark-arrow-up",
     "org": "building", "table": "table", "view": "eye", "collection": "collection", "database": "database",
-    "key2": "key",
+    "key2": "key", "github": "github", "releases": "rocket-takeoff",
 }
 
 
