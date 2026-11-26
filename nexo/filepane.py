@@ -32,12 +32,115 @@ def new_store():
     return store
 
 
+# --- iconos por tipo de archivo -------------------------------------------------
+# tipo -> (icono de Bootstrap Icons, color). Los colores son fijos para que cada tipo se
+# reconozca igual en cualquier tema.
+KINDS = {
+    "folder": ("folder-fill", "#e8b75a"),
+    "link": ("link-45deg", "#5fd4d4"),
+    "archive": ("file-earmark-zip", "#c8955c"),
+    "pdf": ("file-earmark-pdf", "#ff6b6b"),
+    "image": ("file-earmark-image", "#5fd49a"),
+    "video": ("file-earmark-play", "#ff7fc8"),
+    "audio": ("file-earmark-music", "#b18cff"),
+    "code": ("file-earmark-code", "#6cb6ff"),
+    "script": ("terminal-fill", "#8fd18a"),
+    "text": ("file-earmark-text", "#c8ced9"),
+    "sheet": ("file-earmark-spreadsheet", "#3ddc84"),
+    "doc": ("file-earmark-word", "#5b9bff"),
+    "slides": ("file-earmark-slides", "#ff8a2a"),
+    "key": ("file-earmark-lock", "#f2c66d"),
+    "db": ("database-fill", "#4fd8e0"),
+    "disk": ("disc", "#9aa7bd"),
+    "binary": ("file-earmark-binary", "#a3e635"),
+    "font": ("file-earmark-font", "#d7b4f8"),
+    "config": ("gear-fill", "#9fb3c8"),
+    "file": ("file-earmark", "#8a93a3"),
+}
+_EXT = {}
+for _kind, _exts in {
+    "archive": "zip tar gz tgz bz2 tbz xz txz zst 7z rar lz lzma deb rpm apk jar war ear snap flatpak cab",
+    "pdf": "pdf",
+    "image": "png jpg jpeg gif svg webp bmp ico tif tiff heic avif psd xcf",
+    "video": "mp4 mkv avi mov webm wmv flv m4v mpg mpeg",
+    "audio": "mp3 wav flac ogg oga m4a aac opus wma",
+    "code": "py pyc js mjs cjs ts tsx jsx go rs c h cc cpp hpp cs java kt php rb pl lua swift dart scala r "
+            "html htm css scss sass less vue svelte json jsonc xml yaml yml toml sql graphql proto tf hcl",
+    "script": "sh bash zsh fish ps1 psm1 bat cmd",
+    "text": "txt md rst log nfo readme",
+    "sheet": "xls xlsx xlsm ods csv tsv",
+    "doc": "doc docx odt rtf",
+    "slides": "ppt pptx odp",
+    "key": "pem key crt cer csr der pub p12 pfx jks kdbx gpg asc sig",
+    "db": "db sqlite sqlite3 mdb accdb dump bak frm ibd",
+    "disk": "iso img qcow2 vmdk vdi vhd vhdx dmg",
+    "binary": "exe dll so bin elf o a msi appimage",
+    "font": "ttf otf woff woff2",
+    "config": "conf cfg ini env properties service socket timer rules",
+}.items():
+    for _e in _exts.split():
+        _EXT[_e] = _kind
+_NAMES = {  # archivos conocidos sin extensión (o con una engañosa)
+    "dockerfile": "code", "makefile": "code", "jenkinsfile": "code", "vagrantfile": "code",
+    "authorized_keys": "key", "known_hosts": "key", "id_rsa": "key", "id_ed25519": "key", "id_ecdsa": "key",
+    ".env": "config", ".bashrc": "script", ".zshrc": "script", ".profile": "script", "crontab": "config",
+    "readme": "text", "license": "text", "changelog": "text",
+}
+
+
+def kind_of(name, is_dir=False, is_link=False, mode=0):
+    """Tipo de un archivo para elegir su icono y color."""
+    if is_dir:
+        return "folder"
+    low = name.lower()
+    if low in _NAMES:
+        return _NAMES[low]
+    if low.endswith((".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst")):
+        return "archive"
+    ext = low.rsplit(".", 1)[-1] if "." in low.lstrip(".") else ""
+    if ext in _EXT:
+        return _EXT[ext]
+    if low.startswith("id_") and not ext:
+        return "key"
+    if is_link:
+        return "link"
+    if mode and stat.S_ISREG(mode) and mode & 0o111:
+        return "binary"   # ejecutable sin extensión conocida
+    return "file"
+
+
+_PIXBUFS = {}
+
+
+def kind_pixbuf(kind, size, scale=1):
+    """Icono del tipo pintado en su color (se guarda en caché)."""
+    key = (kind, size, scale)
+    pb = _PIXBUFS.get(key)
+    if pb is None:
+        icon, color = KINDS.get(kind, KINDS["file"])
+        rgba = Gdk.RGBA()
+        rgba.parse(color)
+        info = Gtk.IconTheme.get_default().lookup_icon_for_scale(
+            f"bi-{icon}-symbolic", size, scale, Gtk.IconLookupFlags.FORCE_SIZE)
+        if info is None:
+            return None
+        pb, _ = info.load_symbolic(rgba, None, None, None)
+        _PIXBUFS[key] = pb
+    return pb
+
+
+def _paint_icon(col, cell, model, it, view):
+    scale = view.get_scale_factor()
+    pb = kind_pixbuf(model[it][COL_ICON], 16, scale)
+    if pb is not None and scale > 1:
+        cell.set_property("surface", Gdk.cairo_surface_create_from_pixbuf(pb, scale, view.get_window()))
+    else:
+        cell.set_property("pixbuf", pb)
+
+
 def row_values(name, mode, size, mtime, is_dir=None, is_link=False):
     is_dir = stat.S_ISDIR(mode or 0) if is_dir is None else is_dir
-    if is_dir:
-        icon = "folder-symbolic"
-    else:
-        icon = "emblem-symbolic-link-symbolic" if is_link else "text-x-generic-symbolic"
+    icon = kind_of(name, is_dir, is_link, mode)
     return [icon, name, "" if is_dir else human(size or 0),
             time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime or 0)),
             stat.filemode(mode or 0), is_dir, size or 0, ("0" if is_dir else "1") + name.lower()]
@@ -52,9 +155,10 @@ def build_view(store, perms=True):
     col = Gtk.TreeViewColumn("Nombre")
     r_icon = Gtk.CellRendererPixbuf()
     r_name = Gtk.CellRendererText(ellipsize=Pango.EllipsizeMode.END)
+    r_icon.set_padding(2, 0)
     col.pack_start(r_icon, False)
     col.pack_start(r_name, True)
-    col.add_attribute(r_icon, "icon-name", COL_ICON)
+    col.set_cell_data_func(r_icon, _paint_icon, view)
     col.add_attribute(r_name, "text", COL_NAME)
     col.set_expand(True)
     col.set_sort_column_id(COL_SORT)
