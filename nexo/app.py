@@ -46,6 +46,35 @@ def _ago(ts):
 
 
 
+
+# Terminal local del snap: ssh a 127.0.0.1 con llave propia (ver App._snap_local_shell).
+SNAP_LOCAL_SH = r'''
+BASE="$1"; RC="$2"
+KEY="$BASE/local_ed25519"; KH="$BASE/known_hosts_local"
+U="$(id -un)"; PORT="${NEXO_LOCAL_SSH_PORT:-22}"
+dim() { printf '\e[2m%s\e[0m\n' "$*"; }
+aislada() {
+  dim "$1"
+  dim "Terminal aislada del snap: sin sudo. Activa el servidor SSH (sudo apt install openssh-server) para tener la terminal del sistema."
+  exec /bin/bash --noprofile --rcfile "$RC" -i
+}
+(exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null || aislada "No hay servidor SSH en 127.0.0.1:$PORT."
+[ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N '' -C "nexo-local@$(hostname)" -f "$KEY" || aislada "No se pudo crear la llave local."
+OPTS=(-p "$PORT" -o IdentitiesOnly=yes -i "$KEY" -o UserKnownHostsFile="$KH"
+      -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ServerAliveInterval=30)
+if ssh -n "${OPTS[@]}" -o BatchMode=yes -o ConnectTimeout=5 "$U@127.0.0.1" true 2>/dev/null; then
+  exec ssh -t "${OPTS[@]}" "$U@127.0.0.1"
+fi
+PUB="$(cat "$KEY.pub")"
+printf '\e[1mPrimera vez:\e[0m escribe tu contraseña de Linux para autorizar la llave de Nexo.\n'
+dim "Se agrega a ~/.ssh/authorized_keys y solo sirve desde este equipo (127.0.0.1)."
+ssh -t "${OPTS[@]}" -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive \
+  "$U@127.0.0.1" "umask 077; mkdir -p ~/.ssh; grep -qF '${PUB% *}' ~/.ssh/authorized_keys 2>/dev/null || echo 'from=\"127.0.0.1,::1\",no-agent-forwarding,no-X11-forwarding $PUB' >> ~/.ssh/authorized_keys; exec \$SHELL -l"
+st=$?
+[ $st -eq 255 ] && aislada "No se pudo entrar por SSH a 127.0.0.1."
+exit $st
+'''
+
 class Window(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Nexo")
@@ -1824,18 +1853,23 @@ class NexoApp(Gtk.Application):
 
     @staticmethod
     def _snap_local_shell():
-        """En el snap la terminal local está aislada: no puede leer /etc/profile.d ni el
-        ~/.bashrc real. Arranca bash sin perfiles, con un prompt propio y un aviso."""
-        rc = os.path.join(os.environ.get("SNAP_USER_DATA") or os.path.expanduser("~"), "nexo-local.bashrc")
+        """En el snap (strict) un bash local queda dentro del sandbox: sin sudo, apt ni docker.
+        Por eso la terminal local entra por SSH a 127.0.0.1: la sesión la abre el sshd del
+        sistema, fuera del sandbox. Usa una llave propia de Nexo que se autoriza una sola vez
+        (con la contraseña de Linux) y que solo vale desde localhost (from="127.0.0.1,::1").
+        Si no hay sshd, cae al bash aislado de siempre."""
+        base = os.environ.get("SNAP_USER_COMMON") or os.environ.get("SNAP_USER_DATA") or os.path.expanduser("~")
+        rc = os.path.join(base, "nexo-local.bashrc")
+        script = os.path.join(base, "nexo-local.sh")
         with open(rc, "w", encoding="utf-8") as f:
             f.write(
                 'PS1=\'\\[\\e[1;32m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ \'\n'
                 "alias ls='ls --color=auto' grep='grep --color=auto'\n"
                 "cd \"${SNAP_REAL_HOME:-$HOME}\" 2>/dev/null\n"
-                "printf '\\e[2mTerminal local aislada (Nexo instalado como snap). "
-                "Para administrar este equipo usa la terminal del sistema.\\e[0m\\n'\n"
             )
-        return ["/bin/bash", "--noprofile", "--rcfile", rc, "-i"]
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(SNAP_LOCAL_SH)
+        return ["/bin/bash", "--noprofile", "--norc", script, base, rc]
 
     # --- tema --------------------------------------------------------------
     def _load_css(self):
