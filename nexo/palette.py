@@ -76,6 +76,8 @@ class CommandPalette(Gtk.Window):
             ("shield", "Conectar a una organización (Nexo Server)", "", a.add_org),
             ("import", "Importar hosts de ~/.ssh/config", "", a.import_config),
             ("keys", "Generar llave SSH", "", a.generate_key),
+            ("import", "Importar llave SSH desde archivo", "", a.import_key),
+            ("edit", "Agregar llave SSH manualmente (pegar)", "", a.paste_key),
             ("sidebar", "Mostrar / ocultar panel", "F9",
              lambda: a.win.b_side.set_active(not a.win.b_side.get_active())),
             ("palette", "Cambiar tema", "", lambda: a.win.b_theme.set_active(True)),

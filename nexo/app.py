@@ -417,11 +417,12 @@ class Window(Gtk.ApplicationWindow):
         # llaves
         kb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         kb.pack_start(self._panel_header("Llaves SSH", [
-            ("import", "Importar llave…", self.app.import_key),
+            ("import", "Importar llave desde archivo…", self.app.import_key),
+            ("edit", "Agregar llave manualmente (pegar)", self.app.paste_key),
             ("plus", "Generar llave", self.app.generate_key),
         ]), False, False, 0)
         self.key_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.key_list.set_placeholder(self._empty("Sin llaves", "Genera una o importa desde ~/.ssh"))
+        self.key_list.set_placeholder(self._empty("Sin llaves", "Genera una, impórtala desde ~/.ssh o pégala con el lápiz"))
         s2 = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         s2.add(self.key_list)
         kb.pack_start(s2, True, True, 0)
@@ -2079,9 +2080,46 @@ class NexoApp(Gtk.Application):
         self.copy_text(rec["public"], "Llave generada; la pública quedó copiada al portapapeles")
 
     def import_key(self):
+        if self._ssh_dir_access("importar tus llaves") is None:
+            return
         rec = D.import_key_dialog(self.win)
         if rec:
             self._add_key(rec)
+
+    def paste_key(self):
+        if not self.vault.unlocked:
+            return
+        rec = D.paste_key_dialog(self.win)
+        if rec:
+            self._add_key(rec)
+
+    def _ssh_dir_access(self, what):
+        """¿Se puede leer ~/.ssh? En el snap, si no, pide permiso en vez de fallar.
+
+        Devuelve True (hay acceso), False (el usuario elegirá el archivo a mano) o None (canceló).
+        """
+        ssh_dir = os.path.join(conn.REAL_HOME, ".ssh")
+        while True:
+            try:
+                os.listdir(ssh_dir)
+                return True
+            except FileNotFoundError:
+                return False
+            except OSError:
+                if not os.environ.get("SNAP"):
+                    return False
+            r = D.ssh_permission_dialog(self.win, what, lambda t: self.copy_text(t, "Comando copiado"))
+            if r == "pick":
+                return False
+            if r is None:
+                return None
+            # "retry": vuelve a comprobar; si aún no hay acceso, el diálogo reaparece
+            try:
+                os.listdir(ssh_dir)
+                self.toast("Permiso concedido: Nexo ya puede leer ~/.ssh")
+                return True
+            except OSError:
+                self.toast("Todavía sin acceso a ~/.ssh. ¿Ejecutaste el comando?", error=True)
 
     def _add_key(self, rec):
         for k in self.vault.keys:
@@ -2126,9 +2164,14 @@ class NexoApp(Gtk.Application):
         if not self.vault.unlocked:
             return
         path = os.path.join(conn.REAL_HOME, ".ssh", "config")
-        if not os.access(path, os.R_OK):
-            # En el snap la carpeta oculta ~/.ssh no es visible: se elige el archivo
-            # con el selector del sistema, que da acceso solo a ese archivo.
+        access = self._ssh_dir_access("importar tu ~/.ssh/config y sus llaves")
+        if access is None:
+            return
+        if access and not os.path.isfile(path):
+            D.msg(self.win, "No tienes un ~/.ssh/config",
+                  "Puedes elegir otro archivo de configuración SSH.", Gtk.MessageType.INFO)
+        if not (access and os.access(path, os.R_OK)):
+            # sin permiso (o sin archivo): el selector del sistema da acceso solo a lo que elijas
             d = Gtk.FileChooserNative.new("Elige tu archivo de configuración SSH (~/.ssh/config)",
                                           self.win, Gtk.FileChooserAction.OPEN, None, None)
             ok = d.run() == Gtk.ResponseType.ACCEPT

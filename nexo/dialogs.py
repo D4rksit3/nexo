@@ -6,7 +6,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gdk, Gtk  # noqa: E402
 
 from . import icons as I  # noqa: E402
 from . import dbclient as DB  # noqa: E402
@@ -425,6 +425,16 @@ def load_key_file(parent, path, name=None):
     except OSError as e:
         msg(parent, "No se pudo leer el archivo", str(e))
         return None
+    base = name or os.path.basename(path)
+    for suf in (".pem", ".key"):
+        if base.endswith(suf):
+            base = base[: -len(suf)]
+    return load_key_text(parent, text, base, os.path.basename(path))
+
+
+def load_key_text(parent, text, name, label=None):
+    """Convierte el texto de una llave privada en un registro; pide la frase si hace falta."""
+    label = label or name
     passphrase = None
     while True:
         try:
@@ -432,7 +442,7 @@ def load_key_file(parent, path, name=None):
             break
         except K.NeedsPassphrase:
             passphrase = ask_text(parent, "Frase de paso",
-                                  f"La llave {os.path.basename(path)} está protegida. Escribe su frase de paso:",
+                                  f"La llave {label} está protegida. Escribe su frase de paso:",
                                   secret=True)
             if passphrase is None:
                 return None
@@ -444,11 +454,97 @@ def load_key_file(parent, path, name=None):
                 continue
             msg(parent, "No se pudo importar la llave", str(e))
             return None
-    base = name or os.path.basename(path)
-    for suf in (".pem", ".key"):
-        if base.endswith(suf):
-            base = base[: -len(suf)]
-    return K.make_key_record(base, pk)
+    return K.make_key_record(name, pk)
+
+
+def paste_key_dialog(parent):
+    """Agregar una llave privada pegando su texto. Devuelve el registro o None."""
+    d = Gtk.Dialog(title="Agregar llave manualmente", transient_for=parent, modal=True)
+    d.add_buttons("Cancelar", Gtk.ResponseType.CANCEL, "Agregar", Gtk.ResponseType.OK)
+    d.set_default_response(Gtk.ResponseType.OK)
+    d.set_default_size(560, 420)
+    box = d.get_content_area()
+    box.set_border_width(16)
+    box.set_spacing(8)
+    name = Gtk.Entry(placeholder_text="Nombre, ej. servidor-produccion", activates_default=False)
+    box.add(Gtk.Label(label="Nombre", xalign=0))
+    box.add(name)
+    lbl = Gtk.Label(xalign=0, wrap=True)
+    lbl.set_markup("Llave <b>privada</b> (OpenSSH o PEM). Pega el contenido completo, desde "
+                   "<tt>-----BEGIN …</tt> hasta <tt>-----END …</tt>:")
+    lbl.set_margin_top(6)
+    box.add(lbl)
+    tv = Gtk.TextView(monospace=True, wrap_mode=Gtk.WrapMode.CHAR, accepts_tab=False)
+    tv.set_left_margin(8)
+    tv.get_style_context().add_class("nx-mono")
+    tv.set_top_margin(6)
+    sw = Gtk.ScrolledWindow(vexpand=True)
+    sw.set_shadow_type(Gtk.ShadowType.IN)
+    sw.add(tv)
+    box.pack_start(sw, True, True, 0)
+    paste = Gtk.Button(label="Pegar del portapapeles")
+    paste.set_halign(Gtk.Align.START)
+
+    def do_paste(_b):
+        t = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text()
+        if t:
+            tv.get_buffer().set_text(t.strip() + "\n")
+    paste.connect("clicked", do_paste)
+    box.add(paste)
+    hint = Gtk.Label(label="Se guarda cifrada en la bóveda; no se escribe en disco.", xalign=0)
+    hint.get_style_context().add_class("dim-label")
+    box.add(hint)
+    d.show_all()
+    rec = None
+    while d.run() == Gtk.ResponseType.OK:
+        buf = tv.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+        if not text:
+            msg(d, "Pega el contenido de la llave privada")
+            continue
+        if "PUBLIC KEY" in text or text.startswith(("ssh-", "ecdsa-")):
+            msg(d, "Eso es una llave pública",
+                "Para conectarte Nexo necesita la llave privada (el archivo sin .pub).")
+            continue
+        rec = load_key_text(d, text, name.get_text().strip() or "llave")
+        if rec:
+            break
+    d.destroy()
+    return rec
+
+
+SSH_CONNECT_CMD = "sudo snap connect nexo:ssh-keys"
+
+
+def ssh_permission_dialog(parent, what, on_copy):
+    """El snap no puede leer ~/.ssh: explica cómo dar permiso.
+
+    Devuelve "retry" (ya dio permiso), "pick" (elegir el archivo a mano) o None.
+    """
+    d = Gtk.MessageDialog(transient_for=parent, modal=True, message_type=Gtk.MessageType.QUESTION,
+                          buttons=Gtk.ButtonsType.NONE,
+                          text="Nexo necesita permiso para leer tu carpeta ~/.ssh")
+    d.format_secondary_markup(
+        f"Para {what}, Nexo (instalado como snap) debe poder leer <tt>~/.ssh</tt>. "
+        "Ubuntu protege esa carpeta y solo tú puedes darle acceso.\n\n"
+        "<b>1.</b> Copia este comando y ejecútalo en una terminal (te pedirá tu contraseña):\n"
+        f"<tt>    {SSH_CONNECT_CMD}</tt>\n"
+        "<b>2.</b> Vuelve aquí y pulsa <b>Ya di permiso</b>. No hace falta reiniciar Nexo.\n\n"
+        "Si prefieres no darlo, elige el archivo a mano (en el selector, Ctrl+H muestra las carpetas ocultas).")
+    d.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+    d.add_button("Elegir archivo…", 2)
+    d.add_button("Copiar comando", 3)
+    d.add_button("Ya di permiso", Gtk.ResponseType.OK)
+    d.get_widget_for_response(Gtk.ResponseType.OK).get_style_context().add_class("suggested-action")
+    d.set_default_response(Gtk.ResponseType.OK)
+    while True:
+        r = d.run()
+        if r == 3:
+            on_copy(SSH_CONNECT_CMD)
+            continue
+        break
+    d.destroy()
+    return {Gtk.ResponseType.OK: "retry", 2: "pick"}.get(r)
 
 
 def change_password_dialog(parent):
