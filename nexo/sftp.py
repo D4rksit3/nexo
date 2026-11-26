@@ -1,4 +1,6 @@
 """Pestaña SFTP: navegador de archivos remoto con paramiko en un hilo aparte."""
+import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -23,6 +25,19 @@ from .filepane import (COL_BYTES, COL_ISDIR, COL_NAME, COL_PERM, INFO_REMOTE, IN
 
 class Cancelled(Exception):
     pass
+
+
+@contextlib.contextmanager
+def _where(place, path):
+    """Un «Permission denied» a secas no dice si falló este equipo o el servidor: se aclara."""
+    try:
+        yield
+    except PermissionError as e:
+        raise PermissionError(errno.EACCES, f"Permiso denegado {place}: {path}") from e
+    except OSError as e:
+        if e.errno == errno.EACCES:
+            raise PermissionError(errno.EACCES, f"Permiso denegado {place}: {path}") from e
+        raise
 
 
 def _sha(path):
@@ -174,7 +189,8 @@ class SftpTab(Gtk.Box):
                 self.refresh()
                 self.local.refresh()
                 return False
-            msg = str(err) or type(err).__name__
+            msg = (err.strerror if isinstance(err, OSError) and err.errno and err.strerror else str(err)) \
+                or type(err).__name__
             self.set_status(f"✖ {msg}")
             self.app.toast(f"SFTP {self.host['name']}: {msg}", error=True)
         elif done:
@@ -532,44 +548,52 @@ class SftpTab(Gtk.Box):
         if not self.cwd:
             return
         dest = dest or self.cwd
-        paths = [p for p in paths if os.path.exists(p)]
-        if not paths:
-            return
+        lfs = self.local.xfer_fs
 
         def existing():
-            return set(self.sftp.listdir(dest))
+            ok = [p for p in paths if lfs.exists(p)]
+            return ok, (set(self.sftp.listdir(dest)) if ok else set())
 
-        def decide(names_there):
+        def decide(res):
+            paths, names_there = res
+            if not paths:
+                self.app.toast("No se encontraron esos archivos en este equipo", error=True)
+                return
             clash = {os.path.basename(p.rstrip("/")) for p in paths} & names_there
             choice = self._ask_overwrite(clash, f"{self.host['name']}:{dest}")
             if choice is None:
                 return
             todo = [p for p in paths if choice or os.path.basename(p.rstrip("/")) not in clash]
             if todo:
-                self._do_upload(todo, dest)
+                self._do_upload(todo, dest, lfs)
 
         self.submit(existing, decide)
 
-    def _do_upload(self, paths, dest):
+    def _do_upload(self, paths, dest, lfs):
         n = len(paths)
         count = [0]
 
         def put_tree(local, remote, i):
             if self.cancel.is_set():
                 raise Cancelled()
-            if os.path.isdir(local):
+            if lfs.isdir(local):
                 try:
                     self.sftp.mkdir(remote)
                 except OSError:
                     pass
-                for name in sorted(os.listdir(local)):
+                with _where("en este equipo", local):
+                    names = sorted(lfs.listdir(local))
+                for name in names:
                     put_tree(os.path.join(local, name), posixpath.join(remote, name), i)
-            elif os.path.isfile(local):
+            elif lfs.isfile(local):
                 tag = f"↑ {os.path.basename(local)}" + (f" ({i}/{n})" if n > 1 else "")
                 part = remote + ".nexo-parcial"
                 try:
-                    self.sftp.put(local, part, callback=self._progress_cb(tag))
-                    self._replace_remote(part, remote)  # nunca deja un archivo a medias con el nombre final
+                    with _where("en este equipo", local):
+                        f = lfs.open(local, "rb")
+                    with f, _where(f"en {self.host['name']}", remote):
+                        self.sftp.putfo(f, part, file_size=lfs.size(local), callback=self._progress_cb(tag))
+                        self._replace_remote(part, remote)  # nunca deja un archivo a medias con el nombre final
                 except BaseException:
                     try:
                         self.sftp.remove(part)
@@ -616,15 +640,15 @@ class SftpTab(Gtk.Box):
         if not self.sftp:
             return
         items = [tuple(x) for x in items]
-        clash = {name for name, *_ in items if os.path.exists(os.path.join(dest, name))}
+        clash = {name for name, *_ in items if self.local.fs.exists(os.path.join(dest, name))}
         choice = self._ask_overwrite(clash, dest)
         if choice is None:
             return
         todo = [x for x in items if choice or x[0] not in clash]
         if todo:
-            self._do_download(todo, src, dest)
+            self._do_download(todo, src, dest, self.local.xfer_fs)
 
-    def _do_download(self, items, src, dest):
+    def _do_download(self, items, src, dest, lfs):
         n = len(items)
         count = [0]
 
@@ -632,19 +656,30 @@ class SftpTab(Gtk.Box):
             if self.cancel.is_set():
                 raise Cancelled()
             if is_dir:
-                os.makedirs(local, exist_ok=True)
-                for a in self.sftp.listdir_attr(remote):
+                with _where("en este equipo", local):
+                    lfs.makedirs(local)
+                with _where(f"en {self.host['name']}", remote):
+                    attrs = self.sftp.listdir_attr(remote)
+                for a in attrs:
                     get_tree(posixpath.join(remote, a.filename), os.path.join(local, a.filename),
                              stat.S_ISDIR(a.st_mode or 0), i)
             else:
                 tag = f"↓ {posixpath.basename(remote)}" + (f" ({i}/{n})" if n > 1 else "")
                 part = local + ".nexo-parcial"
                 try:
-                    self.sftp.get(remote, part, callback=self._progress_cb(tag))
-                    os.replace(part, local)  # nunca deja un archivo a medias con el nombre final
+                    with _where("en este equipo", local):
+                        f = lfs.open(part, "wb")
+                    with f:
+                        with _where(f"en {self.host['name']}", remote):
+                            self.sftp.getfo(remote, f, callback=self._progress_cb(tag))
+                    with _where("en este equipo", local):
+                        lfs.replace(part, local)  # nunca deja un archivo a medias con el nombre final
                 finally:
-                    if os.path.exists(part):
-                        os.unlink(part)
+                    try:
+                        if lfs.exists(part):
+                            lfs.remove(part)
+                    except OSError:
+                        pass
                 count[0] += 1
 
         def job():
@@ -781,6 +816,7 @@ class SftpTab(Gtk.Box):
     def close(self):
         self.closed = True
         self.cancel.set()
+        self.local.close()
         for rec in self.editing.values():
             rec["monitor"].cancel()
             if rec["timer"]:

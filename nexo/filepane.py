@@ -2,6 +2,7 @@
 import json
 import os
 import stat
+import threading
 import time
 from urllib.parse import unquote, urlparse
 
@@ -9,7 +10,9 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GLib, GObject, Gtk, Pango  # noqa: E402
+
+from . import localfs as LF  # noqa: E402
 
 COL_ICON, COL_NAME, COL_SIZE, COL_MTIME, COL_PERM, COL_ISDIR, COL_BYTES, COL_SORT = range(8)
 
@@ -204,13 +207,17 @@ def uris_to_paths(uris):
     return out
 
 
+def head_markup(text, sub=None):
+    return (f"<b>{GLib.markup_escape_text(text)}</b>" +
+            (f"  <span alpha='60%'>{GLib.markup_escape_text(sub)}</span>" if sub else ""))
+
+
 def head_label(icon_widget, text, sub=None):
     box = Gtk.Box(spacing=8)
     box.get_style_context().add_class("nx-files-head")
     box.pack_start(icon_widget, False, False, 0)
     t = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
-    t.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>" +
-                 (f"  <span alpha='60%'>{GLib.markup_escape_text(sub)}</span>" if sub else ""))
+    t.set_markup(head_markup(text, sub))
     box.pack_start(t, True, True, 0)
     return box, t
 
@@ -221,6 +228,9 @@ class LocalPane(Gtk.Box):
     on_send(paths, dest_name|None): subir esos archivos al servidor (dest_name = carpeta remota
     bajo el puntero, o None para la carpeta abierta del servidor).
     on_receive(items, src_dir, dest_dir): bajar ítems del servidor a una carpeta local.
+
+    Los archivos se leen por self.fs (hilo de GTK) y las transferencias usan self.xfer_fs
+    (hilo de trabajo). En el snap ambos van por SSH a 127.0.0.1 (ver localfs).
     """
 
     def __init__(self, app, start_dir, on_send, on_receive, send_label="Subir"):
@@ -230,10 +240,14 @@ class LocalPane(Gtk.Box):
         self.app = app
         self.on_send = on_send
         self.on_receive = on_receive
+        self.start_dir = start_dir
         self.cwd = None
         self.show_hidden = False
+        self.fs = self.xfer_fs = LF.OsFS()
+        self.link = None
+        self.closed = False
 
-        head, _ = head_label(I.ui_image("home", 14), "Este equipo")
+        head, self.head = head_label(I.ui_image("home", 14), "Este equipo")
         self.pack_start(head, False, False, 0)
 
         bar = Gtk.Box(spacing=4)
@@ -253,7 +267,7 @@ class LocalPane(Gtk.Box):
         btn("home", "Carpeta personal", lambda: self.navigate(start_dir))
         btn("refresh", "Actualizar (F5)", self.refresh)
         self.path_entry = Gtk.Entry()
-        self.path_entry.connect("activate", lambda e: self.navigate(os.path.expanduser(e.get_text().strip())))
+        self.path_entry.connect("activate", lambda e: self.navigate(self._expand(e.get_text().strip())))
         bar.pack_start(self.path_entry, True, True, 4)
         send = Gtk.Button()
         sb = Gtk.Box(spacing=6)
@@ -292,12 +306,70 @@ class LocalPane(Gtk.Box):
         sw.add(self.view)
         self.pack_start(sw, True, True, 0)
         self.navigate(start_dir)
+        if LF.via_ssh():
+            self._set_sub("conectando por SSH a 127.0.0.1…")
+            threading.Thread(target=self._link_thread, daemon=True).start()
+
+    # --- acceso fuera del sandbox (snap) ---------------------------------------
+    def _set_sub(self, sub, tip=None):
+        self.head.set_markup(head_markup("Este equipo", sub))
+        self.head.set_tooltip_text(tip)
+
+    def _link_thread(self, password=None):
+        try:
+            if password is not None:
+                LF.authorize(password)
+            link, err = LF.connect(), None
+        except Exception as e:  # noqa: BLE001
+            link, err = None, e
+        GLib.idle_add(self._linked, link, err)
+
+    def _linked(self, link, err):
+        if self.closed:
+            if link:
+                link.close()
+            return False
+        if link:
+            self.link = link
+            self.fs, self.xfer_fs = link.ui, link.xfer
+            self._set_sub("todo el equipo · SSH 127.0.0.1",
+                          "Nexo entra por SSH a este mismo equipo para ver y escribir todo el disco "
+                          "con tus permisos de usuario, fuera del sandbox del snap.")
+            self.refresh()
+        elif isinstance(err, LF.NeedPassword):
+            from .dialogs import ask_text
+
+            pw = ask_text(self.app.win, "Acceso a todo el equipo",
+                          "El snap solo deja ver parte del disco. Para ver y escribir en cualquier carpeta,\n"
+                          "Nexo entra por SSH a 127.0.0.1 con una llave propia que solo vale desde este equipo.\n\n"
+                          "Escribe tu contraseña de Linux para autorizarla (solo esta vez):",
+                          secret=True, ok="Autorizar")
+            if pw:
+                self._set_sub("autorizando…")
+                threading.Thread(target=self._link_thread, args=(pw,), daemon=True).start()
+            else:
+                self._set_sub("solo lo que permite el snap",
+                              "Sin la autorización, «Este equipo» solo ve tu carpeta personal (sin ocultos).")
+        elif isinstance(err, LF.NoSshd):
+            self._set_sub("solo lo que permite el snap",
+                          "Para ver todo el disco instala el servidor SSH: sudo apt install openssh-server")
+        else:
+            self._set_sub("solo lo que permite el snap", f"No se pudo entrar por SSH a 127.0.0.1: {err}")
+            self.app.toast(f"Este equipo por SSH: {err}", error=True)
+        return False
+
+    def close(self):
+        self.closed = True
+        if self.link:
+            self.link.close()
+            self.link = None
+        self.fs = self.xfer_fs = LF.OsFS()
 
     # --- navegación ------------------------------------------------------
     def navigate(self, path):
-        path = os.path.abspath(path or "/")
+        path = os.path.normpath(os.path.join(self.cwd or "/", path or "/"))
         try:
-            entries = list(os.scandir(path))
+            entries = self.fs.scandir(path)
         except OSError as e:
             self.app.toast(f"No se puede abrir {path}: {e.strerror or e}", error=True)
             return
@@ -305,15 +377,16 @@ class LocalPane(Gtk.Box):
         self.path_entry.set_text(path)
         self.path_entry.set_position(-1)  # que se vea la carpeta actual, no el inicio de la ruta
         self.store.clear()
-        for e in entries:
-            if not self.show_hidden and e.name.startswith("."):
+        for name, mode, size, mtime, is_dir, is_link in entries:
+            if not self.show_hidden and name.startswith("."):
                 continue
-            try:
-                st = e.stat(follow_symlinks=True)
-                is_dir = e.is_dir(follow_symlinks=True)
-            except OSError:  # enlace roto
-                st, is_dir = e.stat(follow_symlinks=False), False
-            self.store.append(row_values(e.name, st.st_mode, st.st_size, st.st_mtime, is_dir, e.is_symlink()))
+            self.store.append(row_values(name, mode, size, mtime, is_dir, is_link))
+
+    def _expand(self, text):
+        # En el snap $HOME es ~/snap/nexo/…: «~» tiene que ser la carpeta personal real.
+        if text == "~" or text.startswith("~/"):
+            return self.start_dir + text[1:]
+        return text
 
     def refresh(self):
         if self.cwd:
@@ -336,9 +409,9 @@ class LocalPane(Gtk.Box):
             self.navigate(target)
         else:
             try:
-                Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(target), None)
-            except GLib.Error as e:
-                self.app.toast(f"No se pudo abrir: {e.message}", error=True)
+                self.fs.open_default(target)
+            except (GLib.Error, OSError) as e:
+                self.app.toast(f"No se pudo abrir: {getattr(e, 'message', None) or e}", error=True)
 
     def send_selected(self):
         sel = self.selected()
@@ -440,7 +513,7 @@ class LocalPane(Gtk.Box):
         name = self._ask("Nueva carpeta en este equipo", ok="Crear")
         if name:
             try:
-                os.mkdir(self.path_of(name))
+                self.fs.mkdir(self.path_of(name))
             except OSError as e:
                 self.app.toast(f"No se pudo crear: {e.strerror or e}", error=True)
             self.refresh()
@@ -452,11 +525,11 @@ class LocalPane(Gtk.Box):
         old = sel[0][0]
         new = self._ask("Renombrar", old, ok="Renombrar")
         if new and new != old:
-            if os.path.exists(self.path_of(new)):
+            if self.fs.exists(self.path_of(new)):
                 self.app.toast(f"Ya existe «{new}»", error=True)
                 return
             try:
-                os.rename(self.path_of(old), self.path_of(new))
+                self.fs.rename(self.path_of(old), self.path_of(new))
             except OSError as e:
                 self.app.toast(f"No se pudo renombrar: {e.strerror or e}", error=True)
             self.refresh()
@@ -471,12 +544,7 @@ class LocalPane(Gtk.Box):
         if not confirm(self.app.win, f"¿Mover {len(sel)} elemento(s) a la papelera?", names,
                        ok="Mover a la papelera", destructive=True):
             return
-        failed = []
-        for name, *_ in sel:
-            try:
-                Gio.File.new_for_path(self.path_of(name)).trash(None)
-            except GLib.Error as e:
-                failed.append(f"{name}: {e.message}")
+        failed = self.fs.trash([self.path_of(name) for name, *_ in sel])
         if failed:
             self.app.toast("No se pudo mover a la papelera: " + "; ".join(failed[:2]), error=True)
         self.refresh()
