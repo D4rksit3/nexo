@@ -46,7 +46,7 @@ Section: net
 Priority: optional
 Architecture: all
 Installed-Size: $SIZE
-Depends: python3 (>= 3.10), fonts-inter-variable | fonts-inter, fonts-jetbrains-mono, python3-gi, gir1.2-gtk-3.0, gir1.2-vte-2.91, python3-paramiko (>= 2.9), python3-cryptography, openssh-client
+Depends: python3 (>= 3.10), fonts-inter-variable | fonts-inter, fonts-jetbrains-mono, python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, gir1.2-vte-2.91, python3-paramiko (>= 2.9), python3-cryptography, openssh-client
 Recommends: sshpass, freerdp3-x11, gir1.2-gtksource-4, python3-psycopg2, python3-pymysql, python3-pymssql, python3-pymongo, python3-redis
 Conflicts: enlace
 Replaces: enlace
