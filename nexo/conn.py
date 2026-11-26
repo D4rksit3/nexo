@@ -217,6 +217,7 @@ class Tunnel:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            preexec_fn=K.die_with_parent,
         )
         self._set("conectando")
         threading.Thread(target=self._watch, daemon=True).start()
@@ -384,6 +385,7 @@ class RdpSession:
                 self.proc = subprocess.Popen(
                     [binary, "/args-from:stdin"], stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+                    preexec_fn=K.die_with_parent,  # este hilo espera a xfreerdp hasta que termina
                 )
                 self.proc.stdin.write(("\n".join(args) + "\n").encode())
                 self.proc.stdin.close()
@@ -391,6 +393,7 @@ class RdpSession:
                 self.proc = subprocess.Popen(
                     [binary] + args, stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+                    preexec_fn=K.die_with_parent,
                 )
             started = time.time()
             out = self.proc.stdout.read().decode(errors="replace")

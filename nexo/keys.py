@@ -117,11 +117,53 @@ def paramiko_pkey(private_text):
     raise KeyError_(f"paramiko no pudo leer la llave: {last}")
 
 
+def die_with_parent():
+    """preexec_fn: el hijo recibe SIGTERM si Nexo muere de golpe (kill, cuelgue, cierre de sesión).
+
+    Sin esto un ssh-agent o un túnel quedaban huérfanos: seguían con las llaves cargadas y,
+    en el snap, snapd los cuenta como «app abierta» y `snap refresh nexo` se niega a actualizar.
+    Ojo: la señal llega cuando termina el HILO que lanzó el proceso, así que solo se usa para
+    procesos lanzados desde el hilo principal o desde un hilo que los espera hasta el final.
+    """
+    try:
+        import ctypes
+        import signal
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)  # PR_SET_PDEATHSIG
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clean_stale(base):
+    """Borra carpetas nexo-* de corridas anteriores cuyo agente ya no responde."""
+    import socket
+
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return
+    for name in names:
+        d = os.path.join(base, name)
+        sock = os.path.join(d, "agent.sock")
+        if not name.startswith("nexo-") or not os.path.isdir(d):
+            continue
+        try:
+            s = socket.socket(socket.AF_UNIX)
+            s.settimeout(0.3)
+            s.connect(sock)
+            s.close()
+            continue  # vivo: es de otra ventana de Nexo abierta
+        except OSError:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class Agent:
     """ssh-agent privado de la app."""
 
     def __init__(self):
         base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+        _clean_stale(base)
         self.dir = tempfile.mkdtemp(prefix="nexo-", dir=base)
         os.chmod(self.dir, 0o700)
         self.sock = os.path.join(self.dir, "agent.sock")
@@ -130,6 +172,7 @@ class Agent:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
+            preexec_fn=die_with_parent,
         )
         for _ in range(100):
             if os.path.exists(self.sock):

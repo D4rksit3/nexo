@@ -1500,14 +1500,18 @@ class NexoApp(Gtk.Application):
         return False
 
     def do_shutdown(self):
-        for p in self._pages():
-            p.close()
-        for t in self.tunnels.values():
-            t.stop()
-        for r in self.rdp_sessions:
-            r.stop()
+        # Cada paso por separado: si cerrar una pestaña falla, igual se detienen los túneles
+        # y el ssh-agent (antes un error aquí dejaba el agente vivo y bloqueaba `snap refresh`).
+        steps = [p.close for p in self._pages()]
+        steps += [t.stop for t in self.tunnels.values()]
+        steps += [r.stop for r in self.rdp_sessions]
         if self.agent:
-            self.agent.close()
+            steps.append(self.agent.close)
+        for step in steps:
+            try:
+                step()
+            except Exception as e:  # noqa: BLE001
+                print(f"nexo: error al cerrar: {e!r}", file=sys.stderr)
         Gtk.Application.do_shutdown(self)
 
     def on_unlocked(self):
@@ -2270,4 +2274,10 @@ class NexoApp(Gtk.Application):
 def main():
     GLib.set_prgname("nexo")
     GLib.set_application_name("Nexo")
-    return NexoApp().run(sys.argv)
+    app = NexoApp()
+    # Cerrar sesión, `kill` o Ctrl+C: salir en orden (do_shutdown) y no dejar procesos colgados.
+    import signal
+
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, sig, lambda *_: (app.quit(), GLib.SOURCE_REMOVE)[1])
+    return app.run(sys.argv)
