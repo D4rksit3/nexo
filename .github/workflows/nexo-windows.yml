@@ -69,17 +69,20 @@ jobs:
 
       # Paquete para la Microsoft Store. Name/Publisher salen de Partner Center y se guardan
       # como variables del repositorio (Settings → Variables): MSIX_NAME, MSIX_PUBLISHER,
-      # MSIX_PUBLISHER_DISPLAY_NAME. Sin ellas se arma con identidad de prueba.
+      # MSIX_PUBLISHER_DISPLAY_NAME y MSIX_DISPLAY_NAME (el nombre reservado, tal cual).
+      # Sin ellas se arma con identidad de prueba.
       - name: Empaquetar MSIX
         shell: pwsh
         env:
           MSIX_NAME: ${{ vars.MSIX_NAME || 'SeguriCloud.Nexo.Dev' }}
           MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER || 'CN=SeguriCloud Dev' }}
           MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME || 'SeguriCloud' }}
+          MSIX_DISPLAY_NAME: ${{ vars.MSIX_DISPLAY_NAME || 'Nexo' }}
         run: |
           powershell -ExecutionPolicy Bypass -File win\build-msix.ps1 `
             -Name $env:MSIX_NAME -Publisher $env:MSIX_PUBLISHER `
-            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -SignWithTestCert
+            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -DisplayName $env:MSIX_DISPLAY_NAME `
+            -SignWithTestCert
 
       - name: Instalar el MSIX y autoprueba del paquete instalado
         shell: pwsh
