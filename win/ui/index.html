@@ -21,6 +21,7 @@
     <input type="password" id="pw2" placeholder="Repetir contraseña" hidden>
     <p id="lock-err" class="err" role="alert"></p>
     <button type="submit" class="primary" id="lock-btn">Desbloquear</button>
+    <button type="button" class="linkish" id="lock-import">Importar una bóveda (copia exportada o la de Nexo para Linux)</button>
     <p class="foot"><i class="ic" data-i="shield-lock"></i> Bóveda cifrada AES-256 · nada sale de este equipo</p>
   </form>
 </section>
@@ -28,17 +29,48 @@
 <!-- principal -->
 <section id="main" class="view" hidden>
   <nav class="rail">
-    <button class="rail-btn active" id="rail-hosts" title="Hosts"><i class="ic" data-i="hdd-network"></i></button>
+    <button class="rail-btn active" data-panel="hosts" title="Hosts"><i class="ic" data-i="hdd-network"></i></button>
+    <button class="rail-btn" data-panel="keys" title="Llaves SSH"><i class="ic" data-i="key"></i></button>
+    <button class="rail-btn" data-panel="tunnels" title="Túneles"><i class="ic" data-i="arrow-left-right"></i>
+      <span class="rail-badge" id="tunnel-badge" hidden></span></button>
+    <button class="rail-btn" data-panel="orgs" title="Organizaciones (Nexo Server)"><i class="ic" data-i="building"></i></button>
     <hr>
     <button class="rail-btn" id="rail-local" title="Terminal local (Ctrl+Shift+T)"><i class="ic" data-i="terminal"></i></button>
+    <button class="rail-btn" id="rail-palette" title="Buscar y ejecutar (Ctrl+K)"><i class="ic" data-i="search"></i></button>
     <span class="grow"></span>
+    <button class="rail-btn" id="rail-settings" title="Ajustes"><i class="ic" data-i="gear"></i></button>
     <button class="rail-btn" id="rail-lock" title="Bloquear (Ctrl+Shift+L)"><i class="ic" data-i="lock"></i></button>
   </nav>
 
   <aside class="side" id="side">
-    <header class="panel-head"><span>Hosts</span></header>
-    <input type="search" id="filter" placeholder="Filtrar…  (Ctrl+F)" spellcheck="false">
-    <div id="host-list" class="host-list"></div>
+    <!-- hosts -->
+    <div class="side-panel" data-panel="hosts">
+      <header class="panel-head"><span>Hosts</span>
+        <button class="icon-btn" id="hosts-add" title="Nuevo host (Ctrl+N)"><i class="ic" data-i="plus-lg"></i></button>
+        <button class="icon-btn" id="hosts-more" title="Más"><i class="ic" data-i="three-dots-vertical"></i></button>
+      </header>
+      <input type="search" class="filter" id="filter" placeholder="Filtrar…  (Ctrl+F)" spellcheck="false">
+      <div id="host-list" class="list"></div>
+    </div>
+    <!-- llaves -->
+    <div class="side-panel" data-panel="keys" hidden>
+      <header class="panel-head"><span>Llaves SSH</span>
+        <button class="icon-btn" id="keys-add" title="Agregar llave"><i class="ic" data-i="plus-lg"></i></button>
+      </header>
+      <div id="key-list" class="list"></div>
+    </div>
+    <!-- túneles -->
+    <div class="side-panel" data-panel="tunnels" hidden>
+      <header class="panel-head"><span>Túneles</span></header>
+      <div id="tunnel-list" class="list"></div>
+    </div>
+    <!-- organizaciones -->
+    <div class="side-panel" data-panel="orgs" hidden>
+      <header class="panel-head"><span>Organizaciones</span>
+        <button class="icon-btn" id="orgs-add" title="Conectar a una organización"><i class="ic" data-i="plus-lg"></i></button>
+      </header>
+      <div id="org-list" class="list"></div>
+    </div>
   </aside>
 
   <div class="work">
@@ -55,13 +87,20 @@
               <p class="muted" id="home-stats"></p>
             </div>
           </div>
+          <form class="quick" id="quick-form" autocomplete="off">
+            <i class="ic" data-i="lightning-charge"></i>
+            <input id="quick" placeholder="Conexión rápida: usuario@host:puerto" spellcheck="false">
+            <button class="primary" type="submit">Conectar</button>
+          </form>
           <div class="section-label">RECIENTES</div>
           <div id="recent" class="recent"></div>
           <div class="chips">
             <button class="chip" id="home-local"><i class="ic" data-i="terminal"></i> <span id="home-local-name">Terminal local</span></button>
+            <button class="chip" id="home-new"><i class="ic" data-i="plus-lg"></i> Nuevo host</button>
+            <button class="chip" id="home-import"><i class="ic" data-i="box-arrow-in-right"></i> Importar ~/.ssh/config</button>
           </div>
-          <p class="hint">Doble clic en un host para conectar · Ctrl+Shift+T terminal local · Ctrl+Shift+W cerrar pestaña ·
-            Ctrl+Shift+C / V copiar y pegar · clic derecho: copia lo seleccionado o pega</p>
+          <p class="hint">Doble clic en un host para conectar · clic derecho para más opciones · Ctrl+K buscar ·
+            Ctrl+Shift+T terminal local · Ctrl+Shift+W cerrar pestaña · Ctrl+Shift+C / V copiar y pegar en la terminal</p>
           <p class="hint" id="home-version"></p>
         </div>
       </div>
@@ -69,24 +108,23 @@
   </div>
 </section>
 
-<!-- contraseña de un host -->
-<dialog id="pw-dialog">
-  <form method="dialog" id="pw-form">
-    <h3 id="pw-title">Contraseña</h3>
-    <p class="muted" id="pw-sub"></p>
-    <input type="password" id="pw-host" autocomplete="off">
-    <menu>
-      <button value="cancel" formnovalidate>Cancelar</button>
-      <button value="ok" class="primary">Conectar</button>
-    </menu>
-  </form>
-</dialog>
-
+<div id="ctx" class="ctx" hidden></div>
+<div id="palette" class="palette" hidden>
+  <div class="palette-box">
+    <input id="palette-input" placeholder="Buscar hosts y acciones…" spellcheck="false" autocomplete="off">
+    <div id="palette-list" class="palette-list"></div>
+  </div>
+</div>
 <div id="toast" class="toast" hidden></div>
 
 <script src="vendor/xterm.js"></script>
 <script src="vendor/addon-fit.js"></script>
 <script src="vendor/addon-web-links.js"></script>
+<script src="ui.js"></script>
 <script src="app.js"></script>
+<script src="hosts.js"></script>
+<script src="panels.js"></script>
+<script src="sftp.js"></script>
+<script src="db.js"></script>
 </body>
 </html>

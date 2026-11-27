@@ -1,8 +1,9 @@
 """Arranque: rutas, puente WebSocket, API y ventana."""
 import os
 import sys
+import threading
 
-from . import setup_paths
+from . import IS_WINDOWS, setup_paths
 
 setup_paths()
 
@@ -46,7 +47,53 @@ def _selftest(window, out_path, result):
     window.destroy()
 
 
-def main():
+def _bind_drop(window, api):
+    """Archivos soltados desde el Explorador: pywebview da la ruta completa solo a un
+    manejador registrado en Python (la página no puede verla)."""
+    try:
+        from webview.dom import DOMEventHandler
+
+        window.dom.document.events.drop += DOMEventHandler(api._on_drop, prevent_default=True)
+    except Exception:  # noqa: BLE001 — sin arrastrar desde el Explorador; sigue el resto
+        pass
+
+
+def _watch_session_lock(api):
+    """Windows: avisa a la página cuando se bloquea la sesión (Win+L, suspensión)."""
+    if not IS_WINDOWS:
+        return
+    import ctypes
+    import time
+
+    u32 = ctypes.windll.user32
+    DESKTOP_SWITCHDESKTOP = 0x0100
+
+    def locked():
+        h = u32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
+        if not h:
+            return True
+        try:
+            return not u32.SwitchDesktop(h)
+        finally:
+            u32.CloseDesktop(h)
+
+    def run():
+        was = False
+        while True:
+            time.sleep(2)
+            try:
+                now = locked()
+            except Exception:  # noqa: BLE001
+                return
+            if now and not was and api._vault.unlocked:
+                api._emit("screen_locked")
+            was = now
+
+    threading.Thread(target=run, name="nexo-lock-watch", daemon=True).start()
+
+
+def build():
+    """Crea la API, el puente y la ventana (sin arrancar el bucle). Lo usan main y las pruebas."""
     api = Api()
     api._bridge = Bridge(api._sessions)
     bg = api.theme()["ui"]["win"]
@@ -56,6 +103,13 @@ def main():
     )
     api._window = window
     window.events.closed += api._shutdown
+    window.events.loaded += lambda: _bind_drop(window, api)
+    return window, api
+
+
+def main():
+    window, api = build()
+    _watch_session_lock(api)
     debug = os.environ.get("NEXO_DEBUG") == "1"
     selftest = os.environ.get("NEXO_SELFTEST")
     result = {"ok": True}

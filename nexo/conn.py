@@ -280,6 +280,17 @@ def paramiko_client(vault, host, _seen=None):
             client.get_host_keys().load(SNAP_KNOWN_HOSTS)
     except Exception:  # noqa: BLE001
         pass
+    # Nexo para Windows: known_hosts propio. Con load_host_keys, paramiko guarda ahí cada
+    # llave nueva aceptada y rechaza después una que cambie.
+    own = os.environ.get("NEXO_KNOWN_HOSTS")
+    if own:
+        try:
+            os.makedirs(os.path.dirname(own), exist_ok=True)
+            if not os.path.exists(own):
+                open(own, "a").close()
+            client.load_host_keys(own)
+        except Exception:  # noqa: BLE001
+            pass
     # Llave nueva: se acepta. Llave distinta a la de known_hosts: paramiko la rechaza.
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     kw = dict(

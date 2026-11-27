@@ -21,6 +21,8 @@ def setup_paths():
         appdata = os.environ.get("APPDATA") or os.path.expanduser("~\\AppData\\Roaming")
         os.environ.setdefault("XDG_DATA_HOME", appdata)
         os.environ.setdefault("XDG_CONFIG_HOME", appdata)
+        # llaves de servidor aceptadas (Windows no trae un ~/.ssh/known_hosts que mantener)
+        os.environ.setdefault("NEXO_KNOWN_HOSTS", os.path.join(os.environ["XDG_DATA_HOME"], "nexo", "known_hosts"))
     # Empaquetado con PyInstaller el núcleo viaja dentro; en desarrollo está en la raíz del repo.
     if not getattr(sys, "frozen", False) and REPO_ROOT not in sys.path:
         sys.path.insert(0, REPO_ROOT)

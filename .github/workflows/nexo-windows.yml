@@ -4,8 +4,9 @@ name: Nexo para Windows (nativo)
 # El .zip con Nexo.exe queda en los «Artifacts» de cada ejecución.
 on:
   push:
-    paths: ["win/**", "nexo/vault.py", "nexo/conn.py", "nexo/keys.py", "nexo/themes.py",
-            "nexo/__init__.py", ".github/workflows/nexo-windows.yml"]
+    paths: ["win/**", "nexo/vault.py", "nexo/conn.py", "nexo/keys.py", "nexo/themes.py", "nexo/dbclient.py",
+            "nexo/orgclient.py", "nexo/__init__.py", "packaging/msix/**", "packaging/windows/nexo-nativo.iss",
+            ".github/workflows/nexo-windows.yml"]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +15,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +31,9 @@ jobs:
       - name: Prueba del núcleo (bóveda, puente, ConPTY, portapapeles)
         run: python win/tests/smoke_backend.py
 
+      - name: Prueba de lo propio de Windows (unidades, papelera, credenciales RDP, .rdp, controladores de BD)
+        run: python win/tests/smoke_windows.py
+
       - name: Compilar Nexo.exe
         run: powershell -ExecutionPolicy Bypass -File win/build.ps1
 
@@ -42,6 +46,75 @@ jobs:
           $p = Start-Process -FilePath "dist\Nexo\Nexo.exe" -PassThru -Wait
           Get-Content selftest.json
           if ($p.ExitCode -ne 0) { throw "La autoprueba falló (código $($p.ExitCode))" }
+
+      - name: Instalador nativo (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y | Out-Null
+          $v = (Select-String -Path "nexo\__init__.py" -Pattern '__version__ = "([^"]+)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" "/DSrc=$PWD\dist\Nexo" "/DRoot=$PWD" packaging\windows\nexo-nativo.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup falló" }
+          # instalación silenciosa de prueba y autoprueba del programa instalado
+          $setup = Get-ChildItem dist\Nexo-nativo-Setup-*.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\Nexo-nativo\Nexo.exe"
+          if (-not (Test-Path $exe)) { throw "No quedó instalado en $exe" }
+          $env:NEXO_SELFTEST = "$env:RUNNER_TEMP\selftest-inno.json"
+          $env:APPDATA = "$env:RUNNER_TEMP\nexo-appdata-inno"
+          New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+          $p = Start-Process -FilePath $exe -PassThru -Wait
+          Get-Content $env:NEXO_SELFTEST
+          if ($p.ExitCode -ne 0) { throw "La autoprueba del instalado falló" }
+          Start-Process "$env:LOCALAPPDATA\Programs\Nexo-nativo\unins000.exe" -ArgumentList "/VERYSILENT" -Wait
+
+      # Paquete para la Microsoft Store. Name/Publisher salen de Partner Center y se guardan
+      # como variables del repositorio (Settings → Variables): MSIX_NAME, MSIX_PUBLISHER,
+      # MSIX_PUBLISHER_DISPLAY_NAME. Sin ellas se arma con identidad de prueba.
+      - name: Empaquetar MSIX
+        shell: pwsh
+        env:
+          MSIX_NAME: ${{ vars.MSIX_NAME || 'SeguriCloud.Nexo.Dev' }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER || 'CN=SeguriCloud Dev' }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME || 'SeguriCloud' }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File win\build-msix.ps1 `
+            -Name $env:MSIX_NAME -Publisher $env:MSIX_PUBLISHER `
+            -PublisherDisplayName $env:MSIX_PUBLISHER_DISPLAY_NAME -SignWithTestCert
+
+      - name: Instalar el MSIX y autoprueba del paquete instalado
+        shell: pwsh
+        run: |
+          Import-Certificate -FilePath build\msix\nexo-prueba.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          $pkg = Get-ChildItem dist\Nexo-*-prueba.msix | Select-Object -First 1
+          Add-AppxPackage -Path $pkg.FullName
+          Get-AppxPackage *Nexo* | Format-List Name, Version, InstallLocation, PackageFamilyName
+          $env:NEXO_SELFTEST = "$env:RUNNER_TEMP\selftest-msix.json"
+          $env:APPDATA = "$env:RUNNER_TEMP\nexo-appdata-msix"
+          New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+          # El alias «nexo» arranca la app dentro del paquete y hereda estas variables.
+          $alias = "$env:LOCALAPPDATA\Microsoft\WindowsApps\nexo.exe"
+          $p = Start-Process -FilePath $alias -PassThru
+          for ($i = 0; $i -lt 120 -and -not (Test-Path $env:NEXO_SELFTEST); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path $env:NEXO_SELFTEST)) { throw "El paquete instalado no escribió la autoprueba" }
+          Start-Sleep 2
+          Get-Content $env:NEXO_SELFTEST
+          $r = Get-Content $env:NEXO_SELFTEST | ConvertFrom-Json
+          if (-not $r.ok) { throw "La autoprueba del MSIX falló" }
+          Get-AppxPackage *Nexo* | Remove-AppxPackage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexo-msix
+          path: |
+            dist/Nexo-*.msix
+            build/msix/nexo-prueba.cer
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexo-windows-instalador
+          path: dist/Nexo-nativo-Setup-*.exe
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:

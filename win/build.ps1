@@ -13,11 +13,15 @@ Write-Host "Nexo $version para Windows"
 
 python -m PyInstaller --noconfirm --clean --windowed `
   --name Nexo `
+  --icon "$root\packaging\windows\nexo.ico" `
   --distpath dist --workpath build\pyinstaller --specpath build\pyinstaller `
   --paths . --paths win `
   --add-data "$root\win\ui;ui" `
   --collect-submodules nexo_win `
   --hidden-import nexo.vault --hidden-import nexo.conn --hidden-import nexo.keys --hidden-import nexo.themes `
+  --hidden-import nexo.dbclient --hidden-import nexo.orgclient `
+  --hidden-import psycopg2 --hidden-import pymysql --collect-all pymssql `
+  --collect-submodules pymongo --collect-submodules bson --collect-submodules redis `
   win\run.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falló" }
 

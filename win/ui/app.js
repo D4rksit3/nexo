@@ -1,53 +1,43 @@
 "use strict";
-/* Nexo para Windows — interfaz. Habla con Python por window.pywebview.api y con
+/* Nexo para Windows — núcleo de la interfaz: estado, tema, bloqueo, pestañas, terminales,
+   eventos de Python, paleta y arranque. Habla con Python por window.pywebview.api y con
    cada terminal por un WebSocket local (bytes en binario, control en JSON). */
 
-const $ = (s, el = document) => el.querySelector(s);
-const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 let api = null;
 let INFO = null;
 let THEME = null;
+let SETTINGS = { autolock_min: 15, lock_on_screen: true };
 let HOSTS = [];
 let GROUPS = [];
+let ORGS = [];
 let HOST_ICONS = {};
-const collapsed = new Set();
-const tabs = new Map();          // tabId -> {kind, title, sid, ws, term, fit, pane, btn, host, state}
+const tabs = new Map();          // tabId -> objeto de pestaña (terminal, sftp o db)
 let activeTab = "home";
 let tabSeq = 0;
+const EVENTS = {};               // tipo de evento de Python -> función
 
-// ---------- utilidades ----------
-function icon(name) {
-  const i = document.createElement("i");
-  i.className = "ic";
-  i.style.setProperty("--src", `url("icons/bi-${name}.svg")`);
-  return i;
+/* Llama a la API; si la bóveda se bloqueó por detrás, vuelve a la pantalla de bloqueo. */
+async function call(name, ...args) {
+  let r;
+  try {
+    r = await api[name](...args);
+  } catch (e) {
+    r = { ok: false, error: String(e && e.message || e) };
+  }
+  if (r && r.locked && !$("#main").hidden) { await lockNow(); }
+  return r || { ok: false, error: "Sin respuesta" };
 }
-function paintIcons(root = document) {
-  $$(".ic[data-i]", root).forEach(i => i.style.setProperty("--src", `url("icons/bi-${i.dataset.i}.svg")`));
-}
-let toastTimer = null;
-function toast(text, error = false) {
-  const t = $("#toast");
-  t.textContent = text;
-  t.classList.toggle("error", error);
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 3200);
-}
-function el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (text != null) e.textContent = text;
-  return e;
-}
+window.nexoEvent = ev => { const f = EVENTS[ev.type]; if (f) f(ev); };
 
 // ---------- tema ----------
 function applyTheme(t) {
   THEME = t;
   const u = t.ui, r = document.documentElement.style;
-  const map = { win: "win", side: "side", head: "head", rail: "rail", surf: "surf", surf2: "surf2",
-                line: "line", border2: "border2", fg: "fg", dim: "dim", acc: "acc", "acc-fg": "acc_fg", term: "term" };
+  const map = { win: "win", side: "side", head: "head", rail: "rail", surf: "surf", surf2: "surf2", surf3: "surf3",
+                line: "line", border2: "border2", fg: "fg", dim: "dim", acc: "acc", "acc-fg": "acc_fg", term: "term",
+                sel: "sel" };
   for (const [css, key] of Object.entries(map)) r.setProperty(`--c-${css}`, u[key]);
+  for (const t of tabs.values()) if (t.term) t.term.options.theme = xtermTheme();
 }
 function xtermTheme() {
   const p = THEME.palette, names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
@@ -70,14 +60,17 @@ function showLock() {
     ? "Crea tu contraseña maestra. Cifra todos tus hosts y llaves; no se puede recuperar."
     : "Bóveda bloqueada";
   $("#lock-btn").textContent = creating ? "Crear bóveda" : "Desbloquear";
+  $("#lock-import").textContent = creating
+    ? "¿Ya usas Nexo? Importa tu bóveda (copia exportada o la de Nexo para Linux)"
+    : "Importar otra bóveda (reemplaza la de este equipo)";
   $("#lock-err").textContent = "";
   $("#pw1").value = $("#pw2").value = "";
   setTimeout(() => $("#pw1").focus(), 50);
 }
 async function submitLock(ev) {
   ev.preventDefault();
-  const btn = $("#lock-btn");
-  btn.disabled = true;
+  const b = $("#lock-btn");
+  b.disabled = true;
   $("#lock-err").textContent = "";
   try {
     let r;
@@ -92,165 +85,131 @@ async function submitLock(ev) {
     $("#pw1").value = $("#pw2").value = "";
     await showMain();
   } finally {
-    btn.disabled = false;
+    b.disabled = false;
   }
+}
+async function importVault() {
+  if (INFO.vault_exists && !await confirmDlg("¿Reemplazar la bóveda de este equipo?",
+      "La actual se guarda como copia de respaldo junto al archivo. La importada se abre con SU contraseña maestra.",
+      "Elegir archivo…", false)) return;
+  const r = await api.import_vault();
+  if (r.cancelled) return;
+  if (!r.ok) { $("#lock-err").textContent = r.error; return; }
+  INFO = await api.info();
+  showLock();
+  toast("Bóveda importada: desbloquéala con su contraseña maestra");
 }
 async function lockNow() {
   for (const id of [...tabs.keys()]) closeTab(id, false);
+  hideMenu();
+  $$("dialog[open]").forEach(d => d.close());
+  closePalette();
   await api.lock();
   INFO = await api.info();
+  activate("home");
   showLock();
 }
 
-// ---------- hosts ----------
-async function loadHosts() {
-  const r = await api.hosts();
-  if (!r.ok) return;
-  HOSTS = r.hosts;
-  GROUPS = r.groups;
-  GROUPS.forEach(g => g.collapsed && collapsed.add(g.name));
-  renderHosts();
-  renderHome();
-}
-function hostIcon(h) {
-  const def = HOST_ICONS[h.icon] || HOST_ICONS.server || ["hdd-rack", "", null];
-  const i = icon(def[0]);
-  if (def[2]) i.style.color = def[2];
-  return i;
-}
-function hostSub(h) {
-  const port = h.port && h.port !== 22 ? `:${h.port}` : "";
-  return `${h.user ? h.user + "@" : ""}${h.host}${port}${h.jump ? "  ↳ " + h.jump : ""}`;
-}
-function hostRow(h) {
-  const row = el("div", "host");
-  row.dataset.id = h.id;
-  row.tabIndex = 0;
-  if (h.protocol !== "ssh") {
-    row.classList.add("disabled");
-    row.title = `${h.protocol.toUpperCase()}: llega en la fase 3`;
+// autobloqueo por inactividad (dentro de Nexo) y al bloquear la sesión de Windows
+let lastActivity = Date.now();
+for (const evn of ["keydown", "mousedown", "mousemove", "wheel", "touchstart"])
+  document.addEventListener(evn, () => (lastActivity = Date.now()), { passive: true, capture: true });
+setInterval(() => {
+  if ($("#main").hidden || !SETTINGS.autolock_min) return;
+  if (Date.now() - lastActivity > SETTINGS.autolock_min * 60000) {
+    lockNow().then(() => toast(`Bloqueado tras ${SETTINGS.autolock_min} min sin uso`));
   }
-  row.append(hostIcon(h));
-  const txt = el("div", "txt");
-  txt.append(el("div", "name", h.name), el("div", "sub", h.protocol === "ssh" ? hostSub(h) : h.protocol.toUpperCase() + " · " + h.host));
-  row.append(txt);
-  if (h.protocol === "ssh") {
-    const go = el("button", "go");
-    go.title = "Conectar";
-    go.append(icon("play-fill"));
-    go.addEventListener("click", e => { e.stopPropagation(); connect(h); });
-    row.append(go);
-    row.addEventListener("dblclick", () => connect(h));
-    row.addEventListener("keydown", e => { if (e.key === "Enter") connect(h); });
-  }
-  row.addEventListener("click", () => {
-    $$(".host.selected").forEach(x => x.classList.remove("selected"));
-    row.classList.add("selected");
-  });
-  return row;
-}
-function renderHosts() {
-  const list = $("#host-list");
-  list.replaceChildren();
-  const q = $("#filter").value.trim().toLowerCase();
-  const match = h => !q || [h.name, h.host, h.user, h.group].some(x => (x || "").toLowerCase().includes(q));
-  const shown = HOSTS.filter(match);
-  if (!HOSTS.length) {
-    list.append(el("div", "empty", "Sin hosts todavía. Por ahora se crean en Nexo para Linux; la bóveda es la misma."));
-    return;
-  }
-  if (!shown.length) { list.append(el("div", "empty", "Nada coincide con el filtro")); return; }
-  const names = [...GROUPS.map(g => g.name), ""];
-  for (const g of names) {
-    const items = shown.filter(h => (h.group || "") === g).sort((a, b) => a.name.localeCompare(b.name));
-    if (!items.length) continue;
-    const open = q || !collapsed.has(g);
-    const head = el("div", "group-head");
-    head.append(icon(open ? "chevron-down" : "chevron-right"), el("span", null, g || "Sin grupo"),
-                el("span", "count", String(items.length)));
-    head.addEventListener("click", () => {
-      collapsed.has(g) ? collapsed.delete(g) : collapsed.add(g);
-      renderHosts();
-    });
-    list.append(head);
-    if (open) items.forEach(h => list.append(hostRow(h)));
-  }
-}
-function renderHome() {
-  const n = HOSTS.length;
-  $("#home-stats").textContent = `${n} host${n === 1 ? "" : "s"} · bóveda cifrada AES-256`;
-  const rec = $("#recent");
-  rec.replaceChildren();
-  const recent = HOSTS.filter(h => h.last_used && h.protocol === "ssh").sort((a, b) => b.last_used - a.last_used).slice(0, 6);
-  if (!recent.length) rec.append(el("p", "muted", "Aún no te has conectado a ningún host."));
-  recent.forEach(h => rec.append(hostRow(h)));
-}
+}, 10000);
+EVENTS.screen_locked = () => { if (!$("#main").hidden && SETTINGS.lock_on_screen) lockNow(); };
 
 // ---------- pestañas ----------
-function activate(id) {
-  activeTab = id;
-  $$(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === id));
-  $$(".pane").forEach(p => p.classList.toggle("active", p.dataset.tab === id));
-  const t = tabs.get(id);
-  if (t) requestAnimationFrame(() => { fitTab(t); t.term.focus(); });
-}
-function newTab(title, kind) {
+/* Una pestaña: {id, kind, title, pane, btn, dot, label, onShow(), onClose(), focus()} */
+function addTab(kind, title, iconName) {
   const id = "t" + (++tabSeq);
-  const btn = el("button", "tab");
-  btn.dataset.tab = id;
+  const b = el("button", "tab");
+  b.dataset.tab = id;
   const dot = el("span", "dot connecting");
-  const label = el("span", null, title);
+  const ic = iconName ? icon(iconName) : null;
+  const label = el("span", "tab-label", title);
   const x = el("span", "x");
   x.title = "Cerrar (Ctrl+Shift+W)";
   x.append(icon("x-lg"));
-  btn.append(dot, label, x);
-  btn.addEventListener("click", () => activate(id));
-  btn.addEventListener("auxclick", e => { if (e.button === 1) closeTab(id); });
+  b.append(dot);
+  if (ic) b.append(ic);
+  b.append(label, x);
+  b.addEventListener("click", () => activate(id));
+  b.addEventListener("auxclick", e => { if (e.button === 1) closeTab(id); });
+  b.addEventListener("contextmenu", e => contextMenu(e, [
+    { label: "Cerrar", icon: "x-lg", action: () => closeTab(id) },
+    { label: "Cerrar las demás", action: () => [...tabs.keys()].filter(k => k !== id).forEach(k => closeTab(k, false)) },
+    tab.reconnect ? { label: "Reconectar", icon: "arrow-clockwise", action: () => tab.reconnect() } : null,
+  ]));
   x.addEventListener("click", e => { e.stopPropagation(); closeTab(id); });
-  $("#tabs").append(btn);
-
-  const pane = el("div", "pane term");
+  $("#tabs").append(b);
+  const pane = el("div", "pane " + kind);
   pane.dataset.tab = id;
   $("#panes").append(pane);
-  const term = new Terminal({
-    fontFamily: getComputedStyle(document.body).getPropertyValue("--font-mono"),
-    fontSize: 13, lineHeight: 1.1, cursorBlink: true, scrollback: 20000, theme: xtermTheme(),
-    allowProposedApi: false, macOptionIsMeta: true,
-    windowsPty: INFO.platform === "windows" && kind === "local" ? { backend: "conpty" } : undefined,
-  });
-  const fit = new FitAddon.FitAddon();
-  term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
-  term.open(pane);
-  const tab = { id, kind, title, term, fit, pane, btn, dot, label, ws: null, sid: null, state: "connecting" };
+  const tab = { id, kind, title, pane, btn: b, dot, label, state: "connecting" };
   tabs.set(id, tab);
-  wireTerminal(tab);
-  activate(id);
   return tab;
-}
-function fitTab(t) {
-  try { t.fit.fit(); } catch (_) { /* pestaña oculta */ }
 }
 function setState(t, state) {
   t.state = state;
   t.dot.className = "dot " + state;
 }
+function activate(id) {
+  activeTab = id;
+  $$(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === id));
+  $$(".pane").forEach(p => p.classList.toggle("active", p.dataset.tab === id));
+  const t = tabs.get(id);
+  if (t) {
+    t.btn.scrollIntoView({ block: "nearest", inline: "nearest" });
+    requestAnimationFrame(() => { t.onShow && t.onShow(); t.focus && t.focus(); });
+  }
+}
 function closeTab(id, focusOther = true) {
   const t = tabs.get(id);
   if (!t) return;
-  if (t.ws) { t.ws.onclose = null; t.ws.close(); }
-  if (t.sid) api.close_session(t.sid);
-  t.term.dispose();
+  try { t.onClose && t.onClose(); } catch (_) { /* nada */ }
   t.pane.remove();
   t.btn.remove();
   tabs.delete(id);
   if (focusOther && activeTab === id) {
     const ids = [...tabs.keys()];
     activate(ids.length ? ids[ids.length - 1] : "home");
-  }
+  } else if (activeTab === id) activate("home");
 }
 
-// ---------- terminal <-> sesión ----------
+// ---------- terminales ----------
+function newTerminalTab(title, kind) {
+  const t = addTab(kind === "local" ? "term" : "term", title, kind === "local" ? "terminal" : null);
+  t.termKind = kind;
+  const term = new Terminal({
+    fontFamily: getComputedStyle(document.body).getPropertyValue("--font-mono"),
+    fontSize: 13, lineHeight: 1.1, cursorBlink: true, scrollback: 20000, theme: xtermTheme(),
+    allowProposedApi: false,
+    windowsPty: INFO.platform === "windows" && kind === "local" ? { backend: "conpty" } : undefined,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => api.open_url(uri)));
+  term.open(t.pane);
+  Object.assign(t, { term, fit, ws: null, sid: null });
+  t.onShow = () => fitTab(t);
+  t.focus = () => term.focus();
+  t.onClose = () => {
+    if (t.ws) { t.ws.onclose = null; t.ws.close(); }
+    if (t.sid) api.close_session(t.sid);
+    term.dispose();
+  };
+  t.reconnect = () => reconnect(t);
+  wireTerminal(t);
+  activate(t.id);
+  return t;
+}
+function fitTab(t) {
+  try { t.fit.fit(); } catch (_) { /* pestaña oculta */ }
+}
 function attach(t, r) {
   t.sid = r.sid;
   const ws = new WebSocket(r.ws);
@@ -289,6 +248,7 @@ function wireTerminal(t) {
     if (e.ctrlKey && e.shiftKey && k === "c") { copySelection(t); return false; }
     if (e.ctrlKey && e.shiftKey && k === "v") { paste(t); return false; }
     if (e.ctrlKey && e.shiftKey && ["t", "w", "l", "f"].includes(k)) return false;   // atajos de la app
+    if (e.ctrlKey && !e.shiftKey && k === "k") return false;
     if (e.ctrlKey && e.key === "Tab") return false;
     return true;
   });
@@ -299,12 +259,14 @@ function wireTerminal(t) {
   });
   new ResizeObserver(() => { if (t.pane.classList.contains("active")) fitTab(t); }).observe(t.pane);
 }
-async function copySelection(t) {
-  const text = t.term.getSelection();
-  if (!text) return;
+async function copyText(text, note = "Copiado") {
   try { await navigator.clipboard.writeText(text); }
   catch (_) { await api.clipboard_set(text); }
-  toast("Copiado");
+  if (note) toast(note);
+}
+async function copySelection(t) {
+  const text = t.term.getSelection();
+  if (text) copyText(text);
 }
 async function paste(t) {
   let text = null;
@@ -312,18 +274,15 @@ async function paste(t) {
   catch (_) { const r = await api.clipboard_get(); text = r.ok ? r.text : null; }
   if (text) t.term.paste(text);
 }
-
-// ---------- abrir sesiones ----------
 async function connect(h, password = null) {
   if (h.needs_password && password == null) {
     password = await askPassword(h);
     if (password == null) return;
   }
-  const t = newTab(h.name, "ssh");
+  const t = newTerminalTab(h.name, "ssh");
   t.host = h;
-  t.password = password;
   fitTab(t);
-  const r = await api.open_ssh(h.id, password, t.term.cols, t.term.rows);
+  const r = await call("open_ssh", h.id, password, t.term.cols, t.term.rows);
   if (!r.ok) {
     t.term.write(`\r\n\x1b[31m${r.error}\x1b[0m\r\n`);
     setState(t, "closed");
@@ -333,10 +292,24 @@ async function connect(h, password = null) {
   h.last_used = Date.now() / 1000;
   renderHome();
 }
-async function openLocal() {
-  const t = newTab(INFO.local_shell, "local");
+async function quickConnect(ev) {
+  ev.preventDefault();
+  const target = $("#quick").value.trim();
+  if (!target) return;
+  const pw = await ask(`Contraseña de ${target}`, "Contraseña", "", { secret: true, ok: "Conectar",
+                       sub: "Conexión rápida: no se guarda nada en la bóveda." });
+  if (pw == null) return;
+  const t = newTerminalTab(target, "ssh");
   fitTab(t);
-  const r = await api.open_local(t.term.cols, t.term.rows);
+  const r = await call("open_quick", target, pw, t.term.cols, t.term.rows);
+  if (!r.ok) { t.term.write(`\r\n\x1b[31m${r.error}\x1b[0m\r\n`); setState(t, "closed"); return; }
+  attach(t, r);
+  $("#quick").value = "";
+}
+async function openLocal() {
+  const t = newTerminalTab(INFO.local_shell, "local");
+  fitTab(t);
+  const r = await call("open_local", t.term.cols, t.term.rows);
   if (!r.ok) { t.term.write(`\r\n\x1b[31m${r.error}\x1b[0m\r\n`); setState(t, "closed"); return; }
   attach(t, r);
 }
@@ -345,35 +318,88 @@ async function reconnect(t) {
   if (t.ws) { t.ws.onclose = null; t.ws.close(); }
   setState(t, "connecting");
   t.term.write("\r\n");
-  const r = await api.reopen(t.sid, t.term.cols, t.term.rows);
+  const r = await call("reopen", t.sid, t.term.cols, t.term.rows);
   if (!r.ok) { setState(t, "closed"); return; }
   attach(t, r);
 }
 function askPassword(h) {
-  return new Promise(resolve => {
-    const d = $("#pw-dialog");
-    $("#pw-title").textContent = `Contraseña de ${h.name}`;
-    $("#pw-sub").textContent = hostSub(h);
-    $("#pw-host").value = "";
-    d.onclose = () => {
-      const v = $("#pw-host").value;
-      $("#pw-host").value = "";
-      resolve(d.returnValue === "ok" && v ? v : null);
-    };
-    d.showModal();
-    $("#pw-host").focus();
+  return ask(`Contraseña de ${h.name}`, "Contraseña", "", { secret: true, ok: "Conectar", sub: hostSub(h),
+             placeholder: "no se guarda" });
+}
+
+// ---------- paleta (Ctrl+K) ----------
+let paletteItems = [];
+let paletteIndex = 0;
+function openPalette() {
+  if ($("#main").hidden) return;
+  $("#palette").hidden = false;
+  $("#palette-input").value = "";
+  renderPalette();
+  $("#palette-input").focus();
+}
+function closePalette() { $("#palette").hidden = true; }
+function paletteSource() {
+  const acts = [
+    { label: "Terminal local", sub: INFO.local_shell, icon: "terminal", run: openLocal },
+    { label: "Nuevo host", icon: "plus-lg", run: () => editHost(null) },
+    { label: "Llaves SSH", icon: "key", run: () => showPanel("keys") },
+    { label: "Túneles", icon: "arrow-left-right", run: () => showPanel("tunnels") },
+    { label: "Organizaciones", icon: "building", run: () => showPanel("orgs") },
+    { label: "Ajustes y temas", icon: "gear", run: openSettings },
+    { label: "Importar ~/.ssh/config", icon: "box-arrow-in-right", run: importSshConfig },
+    { label: "Bloquear", icon: "lock", run: lockNow },
+  ];
+  const hostItems = [];
+  for (const h of HOSTS) {
+    hostItems.push({ label: h.name, sub: hostSub(h), host: h, run: () => openHost(h) });
+    if (h.protocol === "ssh") hostItems.push({ label: `SFTP · ${h.name}`, sub: hostSub(h), icon: "folder2-open", run: () => openHost(h, "sftp") });
+  }
+  hostItems.sort((a, b) => (b.host?.last_used || 0) - (a.host?.last_used || 0));
+  return [...hostItems, ...acts];
+}
+function renderPalette() {
+  const q = $("#palette-input").value.trim().toLowerCase();
+  const words = q.split(/\s+/).filter(Boolean);
+  paletteItems = paletteSource().filter(it => words.every(w => (it.label + " " + (it.sub || "")).toLowerCase().includes(w))).slice(0, 40);
+  paletteIndex = 0;
+  const list = $("#palette-list");
+  list.replaceChildren();
+  paletteItems.forEach((it, i) => {
+    const row = el("div", "palette-item" + (i === 0 ? " active" : ""));
+    row.append(it.host ? hostIcon(it.host) : icon(it.icon || "play-fill"), el("span", "grow", it.label));
+    if (it.sub) row.append(el("span", "palette-sub", it.sub));
+    row.addEventListener("mousedown", e => { e.preventDefault(); closePalette(); it.run(); });
+    list.append(row);
   });
+  if (!paletteItems.length) list.append(el("div", "empty", "Nada coincide"));
+}
+function movePalette(d) {
+  const rows = $$(".palette-item");
+  if (!rows.length) return;
+  rows[paletteIndex]?.classList.remove("active");
+  paletteIndex = (paletteIndex + d + rows.length) % rows.length;
+  rows[paletteIndex].classList.add("active");
+  rows[paletteIndex].scrollIntoView({ block: "nearest" });
 }
 
 // ---------- atajos globales ----------
 document.addEventListener("keydown", e => {
   if ($("#main").hidden) return;
+  if (!$("#palette").hidden) {
+    if (e.key === "Escape") { closePalette(); e.preventDefault(); }
+    else if (e.key === "ArrowDown") { movePalette(1); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { movePalette(-1); e.preventDefault(); }
+    else if (e.key === "Enter") { const it = paletteItems[paletteIndex]; closePalette(); if (it) it.run(); e.preventDefault(); }
+    return;
+  }
+  if (document.querySelector("dialog[open]")) return;
   const k = e.key.toLowerCase();
-  if (e.ctrlKey && e.shiftKey && k === "t") { e.preventDefault(); openLocal(); }
+  if (e.ctrlKey && !e.shiftKey && k === "k") { e.preventDefault(); openPalette(); }
+  else if (e.ctrlKey && e.shiftKey && k === "t") { e.preventDefault(); openLocal(); }
   else if (e.ctrlKey && e.shiftKey && k === "w") { e.preventDefault(); if (activeTab !== "home") closeTab(activeTab); }
   else if (e.ctrlKey && e.shiftKey && k === "l") { e.preventDefault(); lockNow(); }
-  else if (e.ctrlKey && !e.shiftKey && k === "f" && !tabs.has(activeTab)) { e.preventDefault(); $("#filter").focus(); }
-  else if (e.ctrlKey && e.shiftKey && k === "f") { e.preventDefault(); $("#filter").focus(); }
+  else if (e.ctrlKey && !e.shiftKey && k === "n" && !isTyping(e)) { e.preventDefault(); editHost(null); }
+  else if (e.ctrlKey && k === "f" && (e.shiftKey || activeTab === "home")) { e.preventDefault(); showPanel("hosts"); $("#filter").focus(); }
   else if (e.ctrlKey && e.key === "Tab") {
     e.preventDefault();
     const ids = ["home", ...tabs.keys()];
@@ -381,14 +407,21 @@ document.addEventListener("keydown", e => {
     activate(ids[(i + (e.shiftKey ? -1 : 1) + ids.length) % ids.length]);
   }
 });
+function isTyping(e) {
+  const t = e.target;
+  return t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && t.type !== "checkbox"));
+}
 
 // ---------- arranque ----------
 async function showMain() {
   $("#lock").hidden = true;
   $("#main").hidden = false;
+  SETTINGS = INFO.settings || SETTINGS;
+  lastActivity = Date.now();
   $("#home-local-name").textContent = `Terminal local · ${INFO.local_shell}`;
-  $("#home-version").textContent = `Nexo ${INFO.version} para ${INFO.platform === "windows" ? "Windows" : "Linux"} · versión de prueba (fase 1)`;
+  $("#home-version").textContent = `Nexo ${INFO.version} para ${INFO.platform === "windows" ? "Windows" : "Linux"}`;
   await loadHosts();
+  if (ORGS.length) call("org_refresh").then(r => { (r.messages || []).forEach(m => toast(m, true)); loadHosts(); });
   $("#filter").focus();
 }
 async function boot() {
@@ -398,18 +431,24 @@ async function boot() {
   INFO = await api.info();
   applyTheme(INFO.theme);
   $("#lock-form").addEventListener("submit", submitLock);
+  $("#lock-import").addEventListener("click", importVault);
   $("#rail-local").addEventListener("click", openLocal);
+  $("#rail-palette").addEventListener("click", openPalette);
+  $("#rail-settings").addEventListener("click", openSettings);
   $("#home-local").addEventListener("click", openLocal);
+  $("#home-new").addEventListener("click", () => editHost(null));
+  $("#home-import").addEventListener("click", importSshConfig);
+  $("#quick-form").addEventListener("submit", quickConnect);
   $("#rail-lock").addEventListener("click", lockNow);
-  $("#rail-hosts").addEventListener("click", () => $("#side").hidden = !$("#side").hidden);
-  $("#filter").addEventListener("input", renderHosts);
-  $("#filter").addEventListener("keydown", e => {
-    if (e.key === "Enter") {
-      const first = $("#host-list .host:not(.disabled)");
-      if (first) connect(HOSTS.find(h => h.id === first.dataset.id));
-    }
-  });
+  $$(".rail-btn[data-panel]").forEach(b => b.addEventListener("click", () => showPanel(b.dataset.panel, true)));
   $(".tab[data-tab=home]").addEventListener("click", () => activate("home"));
+  $("#palette").addEventListener("mousedown", e => { if (e.target.id === "palette") closePalette(); });
+  $("#palette-input").addEventListener("input", renderPalette);
+  initHosts();
+  initPanels();
+  // soltar archivos: el navegador no debe abrirlos; Python recibe las rutas (evento files_dropped)
+  document.addEventListener("dragover", e => e.preventDefault());
+  document.addEventListener("drop", e => e.preventDefault());
   if (INFO.unlocked) await showMain(); else showLock();
 }
 window.addEventListener("pywebviewready", boot);
