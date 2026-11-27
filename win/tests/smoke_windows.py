@@ -106,13 +106,26 @@ if IS_WINDOWS:
     check("subir desde C:\\ vuelve a las unidades", files.local_parent("C:\\") == "")
     check("subir desde C:\\Users", files.local_parent("C:\\Users") == "C:\\", files.local_parent("C:\\Users"))
     check("known_hosts propio en %APPDATA%", os.environ.get("NEXO_KNOWN_HOSTS", "").startswith(TMP))
+    import ctypes
+
+    _adv = ctypes.WinDLL("advapi32", use_last_error=True)
+
+    def cred_exists(target):
+        # Se pregunta a Windows directamente: el texto de cmdkey repite el nombre del destino
+        # en el encabezado aunque no exista («Currently stored credentials for X: * NONE *»).
+        p = ctypes.c_void_p()
+        if _adv.CredReadW(ctypes.c_wchar_p(target), rdp.CRED_TYPE_DOMAIN_PASSWORD, 0, ctypes.byref(p)):
+            _adv.CredFree(p)
+            return True
+        return False
+
     target = "TERMSRV/nexo-prueba.invalid"
     rdp.cred_write(target, "ana", "secreta")
     out = subprocess.run(["cmdkey", f"/list:{target}"], capture_output=True, text=True).stdout
-    check("credencial RDP temporal creada", "nexo-prueba.invalid" in out, out)
+    check("credencial RDP temporal creada", cred_exists(target), out)
     rdp.cred_delete(target)
     out = subprocess.run(["cmdkey", f"/list:{target}"], capture_output=True, text=True).stdout
-    check("credencial RDP borrada", "nexo-prueba.invalid" not in out, out)
+    check("credencial RDP borrada", not cred_exists(target), out)
     check("fuera de un paquete MSIX", _is_packaged() is False)
     check("mstsc disponible", os.path.exists(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "mstsc.exe")))
 
