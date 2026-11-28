@@ -16,7 +16,7 @@ import time
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows es cp1252
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 TMP = tempfile.mkdtemp(prefix="nexo-rdp-")
-os.environ.update(XDG_DATA_HOME=TMP, XDG_CONFIG_HOME=TMP, APPDATA=TMP)
+os.environ.update(XDG_DATA_HOME=TMP, XDG_CONFIG_HOME=TMP, APPDATA=TMP, NEXO_RDP_DEBUG="1")
 sys.path[:0] = [os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))]
 
@@ -29,6 +29,7 @@ if not IS_WINDOWS:
 import clr  # noqa: E402,F401  (pythonnet, lo instala pywebview)
 
 clr.AddReference("System.Windows.Forms")
+from System.Threading import ApartmentState, Thread, ThreadStart  # noqa: E402
 from System.Windows.Forms import Application, Form  # noqa: E402
 
 failures = []
@@ -101,10 +102,18 @@ def scenario(form):
         rdp_embed.later(form, form.Close)
 
 
-form = Form()
-form.Text = "Nexo — prueba RDP"
-form.Width, form.Height = 1280, 800
-form.Shown += lambda *a: threading.Thread(target=scenario, args=(form,), daemon=True).start()
-Application.Run(form)
+def gui():
+    # igual que pywebview: la ventana vive en un hilo STA de .NET
+    form = Form()
+    form.Text = "Nexo — prueba RDP"
+    form.Width, form.Height = 1280, 800
+    form.Shown += lambda *a: threading.Thread(target=scenario, args=(form,), daemon=True).start()
+    Application.Run(form)
+
+
+t = Thread(ThreadStart(gui))
+t.SetApartmentState(ApartmentState.STA)
+t.Start()
+t.Join()
 print("\nTODO OK" if not failures else f"\nFALLAS: {', '.join(failures)}")
 sys.exit(1 if failures else 0)

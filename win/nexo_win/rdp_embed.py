@@ -149,19 +149,34 @@ class _Sink:
     def __init__(self, owner):
         self.o = owner
 
+    def __getattr__(self, name):
+        # eventos que Nexo no usa; con NEXO_RDP_DEBUG=1 se registran para diagnosticar
+        if name.startswith("On") and os.environ.get("NEXO_RDP_DEBUG") == "1":
+            return lambda *a: print(f"[rdp] evento {name} {a!r}", flush=True)
+        raise AttributeError(name)
+
+    def _dbg(self, name, a):
+        if os.environ.get("NEXO_RDP_DEBUG") == "1":
+            print(f"[rdp] evento {name} {a!r}", flush=True)
+
     def OnConnecting(self, *a):
+        self._dbg("OnConnecting", a)
         self.o._event("connecting")
 
     def OnConnected(self, *a):
+        self._dbg("OnConnected", a)
         self.o._event("connecting")
 
     def OnLoginComplete(self, *a):
+        self._dbg("OnLoginComplete", a)
         self.o._on_login()
 
     def OnDisconnected(self, *a):
+        self._dbg("OnDisconnected", a)
         self.o._on_disconnected(int(a[-1]) if a else 0)
 
     def OnFatalError(self, *a):
+        self._dbg("OnFatalError", a)
         self.o._on_disconnected(-1, f"Error interno del control RDP ({a[-1] if a else '?'})")
 
     def OnLeaveFullScreenMode(self, *a):
@@ -283,6 +298,7 @@ class EmbeddedRdp:
         self._events = comtypes.client.GetEvents(self.ctl, _Sink(self), interface=mod.IMsTscAxEvents)
         self._place(x, y, w, h, visible)
         self.ctl.Connect()
+        threading.Thread(target=self._watch, name="rdp-watch", daemon=True).start()
 
     def _configure(self, wpx, hpx):
         h, o = self.host, self.host.get("rdp") or {}
@@ -404,12 +420,35 @@ class EmbeddedRdp:
             _user32().DestroyWindow(self.hwnd)
             self.hwnd = None
 
+    def _watch(self):
+        """Respaldo de los eventos: mira el estado del control cada segundo
+        (0 desconectado, 1 conectado, 2 conectando)."""
+        start, seen = time.time(), 0
+        while not self._closed:
+            time.sleep(1)
+            try:
+                c = on_ui(self.form, lambda: -1 if self.ctl is None else int(self.ctl.Connected))
+            except Exception:  # noqa: BLE001 — la ventana se cerró
+                return
+            if c < 0 or self._closed:
+                return
+            if os.environ.get("NEXO_RDP_DEBUG") == "1":
+                print(f"[rdp] Connected={c}", flush=True)
+            seen = max(seen, c)
+            if c == 1 and not self._logged:
+                on_ui(self.form, self._on_login)
+            elif c == 0 and (seen or time.time() - start > 4):
+                on_ui(self.form, lambda: self._on_disconnected(0))
+                return
+
     # --- eventos (hilo de la interfaz) -------------------------------------------------------
     def _event(self, state, msg=""):
         self.state = state
         threading.Thread(target=self.on_event, args=(self, state, msg), daemon=True).start()
 
     def _on_login(self):
+        if self._logged:
+            return
         self._logged = True
         self._event("connected")
         if self._visible:
@@ -440,8 +479,10 @@ class EmbeddedRdp:
                 return str(text).strip()
         except Exception:  # noqa: BLE001
             pass
-        if reason in NORMAL_REASONS:
-            return "No se pudo iniciar la sesión"
+        if reason in NORMAL_REASONS or reason == 0:
+            if ext:
+                return f"No se pudo iniciar la sesión (motivo {ext})"
+            return "No se pudo iniciar la sesión" if not self._logged else ""
         return f"Se cortó la conexión (código {reason}, {ext})"
 
 
