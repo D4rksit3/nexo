@@ -1884,6 +1884,27 @@ class NexoApp(Gtk.Application):
         self._css.load_from_data(T.build_css(self.theme))
         Gtk.StyleContext.add_provider_for_screen(screen, self._css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
 
+    # --- tamaño de letra de las terminales (ui.json "term_zoom", compartido con Windows) ---
+    def term_font_size(self):
+        base = self.settings.get("font_size", 11)
+        return max(6, min(38, base + int(self.ui.get("term_zoom", 0) or 0)))
+
+    def term_zoom(self, delta):
+        z = 0 if delta == 0 else max(-5, min(27, int(self.ui.get("term_zoom", 0) or 0) + delta))
+        if delta and self.term_font_size() == max(6, min(38, self.settings.get("font_size", 11) + z)):
+            return  # ya en el límite
+        self.ui["term_zoom"] = z
+        try:
+            T.save_ui(self.ui)
+        except OSError:
+            pass
+        size = self.term_font_size()
+        for page in self._pages():
+            if isinstance(page, SplitTab):
+                for p in page.panes:
+                    p.set_font_size(size)
+        self.toast(f"Letra de las terminales: {size}" + ("" if z else " (normal)"))
+
     def apply_theme(self, theme_id, accent=None):
         accent = accent or self.theme.get("accent_id", "tema")
         if theme_id == self.theme["id"] and accent == self.theme.get("accent_id"):

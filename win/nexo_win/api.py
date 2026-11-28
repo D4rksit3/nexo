@@ -94,7 +94,7 @@ class Api:
             "sep": os.sep,
             "home": os.path.expanduser("~"),
             "rdp": rdp.available(),
-            "ui": {"sidebar": bool(self._ui.get("sidebar", True))},
+            "ui": {"sidebar": bool(self._ui.get("sidebar", True)), "term_zoom": int(self._ui.get("term_zoom", 0) or 0)},
             "theme": self.theme(),
             "settings": self._settings() if self._vault.unlocked else None,
         }
@@ -969,9 +969,12 @@ class Api:
     @guarded
     def set_ui_pref(self, key, value):
         """Preferencias de la interfaz que no son secretas (ui.json, compartido con Linux)."""
-        if key not in ("sidebar",):
+        if key == "sidebar":
+            self._ui[key] = bool(value)
+        elif key == "term_zoom":  # pasos sobre el tamaño normal; lo comparte la app de Linux
+            self._ui[key] = max(-6, min(27, int(value)))
+        else:
             return _fail("Preferencia desconocida")
-        self._ui[key] = bool(value)
         T.save_ui(self._ui)
         return {"ok": True}
 

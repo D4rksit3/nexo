@@ -81,6 +81,9 @@ class CommandPalette(Gtk.Window):
             ("sidebar", "Mostrar / ocultar panel", "F9",
              lambda: a.win.b_side.set_active(not a.win.b_side.get_active())),
             ("palette", "Cambiar tema", "", lambda: a.win.b_theme.set_active(True)),
+            ("zoom-in", "Agrandar letra de las terminales", "Ctrl +", lambda: a.term_zoom(1)),
+            ("zoom-out", "Achicar letra de las terminales", "Ctrl −", lambda: a.term_zoom(-1)),
+            ("terminal", "Letra de las terminales: tamaño normal", "Ctrl 0", lambda: a.term_zoom(0)),
             ("lock", "Bloquear bóveda", "Ctrl+L", a.lock),
         ]
 

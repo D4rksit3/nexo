@@ -64,6 +64,7 @@ ICONS = {
 UI = {
     "hosts": "hdd-network", "keys": "key", "tunnels": "arrow-left-right", "terminal": "terminal",
     "palette": "palette", "settings": "sliders", "lock": "lock", "plus": "plus-lg",
+    "zoom-in": "zoom-in", "zoom-out": "zoom-out",
     "folder-plus": "folder-plus", "search": "search", "more": "three-dots-vertical", "play": "play-fill",
     "sftp": "folder2-open", "chevron-down": "chevron-down", "chevron-right": "chevron-right", "chevron-left": "chevron-left",
     "close": "x-lg", "split-right": "layout-split", "split-down": "window-split", "sidebar": "layout-sidebar",

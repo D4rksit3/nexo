@@ -188,7 +188,7 @@ function newTerminalTab(title, kind) {
   t.termKind = kind;
   const term = new Terminal({
     fontFamily: getComputedStyle(document.body).getPropertyValue("--font-mono"),
-    fontSize: 13, lineHeight: 1.1, cursorBlink: true, scrollback: 20000, theme: xtermTheme(),
+    fontSize: termFontSize(), lineHeight: 1.1, cursorBlink: true, scrollback: 20000, theme: xtermTheme(),
     allowProposedApi: false,
     windowsPty: INFO.platform === "windows" && kind === "local" ? { backend: "conpty" } : undefined,
   });
@@ -209,6 +209,34 @@ function newTerminalTab(title, kind) {
   activate(t.id);
   return t;
 }
+// ---------- tamaño de letra de las terminales (Ctrl + / Ctrl - / Ctrl 0 / Ctrl+rueda) ----------
+const TERM_FONT_BASE = 13;
+const ZOOM_KEYS = { "+": 1, "=": 1, "-": -1, "_": -1, "0": 0 };
+let TERM_ZOOM = 0;
+function termFontSize() { return Math.max(7, Math.min(40, TERM_FONT_BASE + TERM_ZOOM)); }
+function termZoom(delta) {
+  const z = delta === 0 ? 0 : Math.max(7 - TERM_FONT_BASE, Math.min(40 - TERM_FONT_BASE, TERM_ZOOM + delta));
+  if (z === TERM_ZOOM && delta !== 0) return;
+  TERM_ZOOM = z;
+  for (const t of tabs.values()) if (t.term) { t.term.options.fontSize = termFontSize(); if (t.id === activeTab) fitTab(t); }
+  api.set_ui_pref("term_zoom", z);
+  toast(`Letra de las terminales: ${termFontSize()} px${z ? "" : " (normal)"}`);
+}
+// el navegador interno no debe hacer zoom a toda la página: solo cambian las terminales
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey && !e.altKey && ZOOM_KEYS[e.key] !== undefined && !isTyping(e)) {
+    e.preventDefault();
+    const t = tabs.get(activeTab);
+    if (t && t.term) termZoom(ZOOM_KEYS[e.key]);
+  }
+}, true);
+document.addEventListener("wheel", e => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const t = tabs.get(activeTab);
+  if (t && t.term && t.pane.contains(e.target) && e.deltaY) termZoom(e.deltaY < 0 ? 1 : -1);
+}, { passive: false });
+
 function fitTab(t) {
   try { t.fit.fit(); } catch (_) { /* pestaña oculta */ }
 }
@@ -252,6 +280,12 @@ function wireTerminal(t) {
     if (e.ctrlKey && e.shiftKey && ["t", "w", "l", "f"].includes(k)) return false;   // atajos de la app
     if (e.ctrlKey && !e.shiftKey && k === "k") return false;
     if (e.ctrlKey && e.key === "Tab") return false;
+    if (e.key === "F9" || e.key === "F11") return false;                               // panel y pantalla completa
+    if (e.ctrlKey && !e.altKey && ZOOM_KEYS[e.key] !== undefined) {                    // letra más grande/chica
+      e.preventDefault();
+      termZoom(ZOOM_KEYS[e.key]);
+      return false;
+    }
     return true;
   });
   // Clic derecho como en Windows Terminal / PuTTY: copia si hay selección, si no pega.
@@ -350,6 +384,9 @@ function paletteSource() {
     { label: "Organizaciones", icon: "building", run: () => showPanel("orgs") },
     { label: "Ajustes y temas", icon: "gear", run: openSettings },
     { label: "Importar ~/.ssh/config", icon: "box-arrow-in-right", run: importSshConfig },
+    { label: "Agrandar letra de las terminales", sub: "Ctrl +", icon: "zoom-in", run: () => termZoom(1) },
+    { label: "Achicar letra de las terminales", sub: "Ctrl -", icon: "zoom-out", run: () => termZoom(-1) },
+    { label: "Letra de las terminales: tamaño normal", sub: "Ctrl 0", icon: "type", run: () => termZoom(0) },
     { label: "Ocultar / mostrar panel de hosts", sub: "F9", icon: "layout-sidebar", run: toggleSidebar },
     { label: "Pantalla completa (sin menús)", sub: "F11", icon: "arrows-fullscreen", run: toggleFocus },
     { label: "Bloquear", icon: "lock", run: lockNow },
@@ -422,6 +459,7 @@ async function showMain() {
   $("#lock").hidden = true;
   $("#main").hidden = false;
   SETTINGS = INFO.settings || SETTINGS;
+  TERM_ZOOM = (INFO.ui && INFO.ui.term_zoom) || 0;
   lastActivity = Date.now();
   $("#home-local-name").textContent = `Terminal local · ${INFO.local_shell}`;
   $("#home-version").textContent = `Nexo ${INFO.version} para ${INFO.platform === "windows" ? "Windows" : "Linux"}`;

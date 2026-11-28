@@ -57,7 +57,7 @@ class TerminalPane(Gtk.Overlay):
         self._drop_zone = None
         self.uid = f"p{id(self):x}"
         app.pane_registry[self.uid] = self
-        self.font_size = app.settings.get("font_size", 11)
+        self.font_size = app.term_font_size()
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.add(body)
@@ -126,6 +126,8 @@ class TerminalPane(Gtk.Overlay):
         self.term.connect("child-exited", self._on_exit)
         self.term.connect("key-press-event", self._on_key)
         self.term.connect("button-press-event", self._on_button)
+        self.term.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
+        self.term.connect("scroll-event", self._on_scroll)
         self._mouse_sel = False
         self.term.connect("button-press-event", self._sel_press)
         self.term.connect("motion-notify-event", self._sel_track)
@@ -427,10 +429,11 @@ class TerminalPane(Gtk.Overlay):
             if ev.keyval in (Gdk.KEY_Left, Gdk.KEY_Up):
                 self.owner.focus_next(-1)
                 return True
+        if mods in (Gdk.ModifierType.CONTROL_MASK, ctrl_shift) and \
+                key in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+            self.zoom(1)  # en teclados US el «+» lleva Shift
+            return True
         if mods == Gdk.ModifierType.CONTROL_MASK:
-            if key in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
-                self.zoom(1)
-                return True
             if key in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
                 self.zoom(-1)
                 return True
@@ -440,8 +443,27 @@ class TerminalPane(Gtk.Overlay):
         return False
 
     def zoom(self, delta):
-        self.font_size = 11 if delta == 0 else max(6, min(32, self.font_size + delta))
+        """Ctrl +/−/0 y Ctrl+rueda: cambia la letra de TODAS las terminales y se recuerda."""
+        self.app.term_zoom(delta)
+
+    def set_font_size(self, size):
+        self.font_size = size
         self._apply_font()
+
+    def _on_scroll(self, widget, ev):
+        if not ev.state & Gdk.ModifierType.CONTROL_MASK:
+            return False
+        if ev.direction == Gdk.ScrollDirection.UP:
+            self.zoom(1)
+        elif ev.direction == Gdk.ScrollDirection.DOWN:
+            self.zoom(-1)
+        elif ev.direction == Gdk.ScrollDirection.SMOOTH:
+            ok, _dx, dy = ev.get_scroll_deltas()
+            self._zacc = getattr(self, "_zacc", 0.0) + (dy if ok else 0.0)
+            if abs(self._zacc) >= 1:
+                self.zoom(-1 if self._zacc > 0 else 1)
+                self._zacc = 0.0
+        return True
 
     def _pop_host_menu(self, button):
         self._menu = self._host_menu(self.retarget)
@@ -523,6 +545,10 @@ class TerminalPane(Gtk.Overlay):
         ck.set_active(self._sel_on())
         ck.connect("toggled", lambda *_: self._toggle_mouse_select())
         menu.append(ck)
+        menu.append(Gtk.SeparatorMenuItem())
+        item("Agrandar letra", lambda: self.zoom(1), accel="Ctrl++")
+        item("Achicar letra", lambda: self.zoom(-1), accel="Ctrl+−")
+        item("Tamaño de letra normal", lambda: self.zoom(0), accel="Ctrl+0")
         menu.append(Gtk.SeparatorMenuItem())
         if self.owner:
             o = self.owner
