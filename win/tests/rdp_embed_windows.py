@@ -13,6 +13,8 @@ import tempfile
 import threading
 import time
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # la consola de Windows es cp1252
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 TMP = tempfile.mkdtemp(prefix="nexo-rdp-")
 os.environ.update(XDG_DATA_HOME=TMP, XDG_CONFIG_HOME=TMP, APPDATA=TMP)
 sys.path[:0] = [os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
