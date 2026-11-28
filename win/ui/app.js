@@ -37,12 +37,14 @@ function applyTheme(t) {
                 line: "line", border2: "border2", fg: "fg", dim: "dim", acc: "acc", "acc-fg": "acc_fg", term: "term",
                 sel: "sel" };
   for (const [css, key] of Object.entries(map)) r.setProperty(`--c-${css}`, u[key]);
+  r.setProperty("--c-tbg", t.bg);  // fondo de las terminales (el único lugar donde manda el tema)
   for (const t of tabs.values()) if (t.term) t.term.options.theme = xtermTheme();
 }
 function xtermTheme() {
   const p = THEME.palette, names = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
   const th = { background: THEME.bg, foreground: THEME.fg, cursor: THEME.accent, cursorAccent: THEME.bg,
-               selectionBackground: THEME.ui.sel, selectionInactiveBackground: THEME.ui.sel };
+               selectionBackground: THEME.term_sel || THEME.ui.sel,
+               selectionInactiveBackground: THEME.term_sel || THEME.ui.sel };
   names.forEach((n, i) => {
     th[n] = p[i];
     th["bright" + n[0].toUpperCase() + n.slice(1)] = p[i + 8];
@@ -126,7 +128,7 @@ EVENTS.screen_locked = () => { if (!$("#main").hidden && SETTINGS.lock_on_screen
 /* Una pestaña: {id, kind, title, pane, btn, dot, label, onShow(), onClose(), focus()} */
 function addTab(kind, title, iconName) {
   const id = "t" + (++tabSeq);
-  const b = el("button", "tab");
+  const b = el("button", "tab k-" + kind);
   b.dataset.tab = id;
   const dot = el("span", "dot connecting");
   const ic = iconName ? icon(iconName) : null;
@@ -333,11 +335,12 @@ let paletteIndex = 0;
 function openPalette() {
   if ($("#main").hidden) return;
   $("#palette").hidden = false;
+  if (typeof rdpSync === "function") rdpSync(true);
   $("#palette-input").value = "";
   renderPalette();
   $("#palette-input").focus();
 }
-function closePalette() { $("#palette").hidden = true; }
+function closePalette() { $("#palette").hidden = true; if (typeof rdpSync === "function") rdpSync(true); }
 function paletteSource() {
   const acts = [
     { label: "Terminal local", sub: INFO.local_shell, icon: "terminal", run: openLocal },
@@ -347,6 +350,8 @@ function paletteSource() {
     { label: "Organizaciones", icon: "building", run: () => showPanel("orgs") },
     { label: "Ajustes y temas", icon: "gear", run: openSettings },
     { label: "Importar ~/.ssh/config", icon: "box-arrow-in-right", run: importSshConfig },
+    { label: "Ocultar / mostrar panel de hosts", sub: "F9", icon: "layout-sidebar", run: toggleSidebar },
+    { label: "Pantalla completa (sin menús)", sub: "F11", icon: "arrows-fullscreen", run: toggleFocus },
     { label: "Bloquear", icon: "lock", run: lockNow },
   ];
   const hostItems = [];
@@ -446,6 +451,7 @@ async function boot() {
   $("#palette-input").addEventListener("input", renderPalette);
   initHosts();
   initPanels();
+  initRdpUi();
   // soltar archivos: el navegador no debe abrirlos; Python recibe las rutas (evento files_dropped)
   document.addEventListener("dragover", e => e.preventDefault());
   document.addEventListener("drop", e => e.preventDefault());

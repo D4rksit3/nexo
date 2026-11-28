@@ -137,8 +137,15 @@ def colors(t):
     }
 
 
+def ui_theme(t):
+    """La interfaz no toma la paleta del tema (esa es solo de las terminales):
+    usa siempre la base neutra de Nexo y únicamente el color de acento elegido."""
+    return get(DEFAULT, t.get("accent_id"))
+
+
 def build_css(t):
-    c = colors(t)
+    c = colors(ui_theme(t))
+    c["termbg"] = t["bg"]  # solo la pestaña activa, para que empalme con la terminal
     css = """
 window, .background, dialog, dialog .dialog-vbox, messagedialog, popover, popover.background,
 menu, .menu, .context-menu, stack, notebook > stack, scrolledwindow, viewport, .enlace-lock {
@@ -310,7 +317,7 @@ notebook.nx-tabs > header tab { padding: 6px 10px 6px 12px; min-height: 26px; co
                                 border-right: 1px solid @line; background: transparent; box-shadow: none;
                                 border-radius: 0; margin: 0; font-size: 12.5px; }
 notebook.nx-tabs > header tab:hover { color: @fg; background-color: alpha(@fg, 0.03); }
-notebook.nx-tabs > header tab:checked { color: @fg; background-color: @term; box-shadow: inset 0 2px 0 @acc; }
+notebook.nx-tabs > header tab:checked { color: @fg; background-color: @termbg; box-shadow: inset 0 2px 0 @acc; }
 button.nx-tab-close { opacity: 0; min-width: 18px; min-height: 18px; padding: 0; border-radius: 4px;
                       background: transparent; border: none; box-shadow: none; }
 tab:hover button.nx-tab-close, tab:checked button.nx-tab-close { opacity: 0.75; }

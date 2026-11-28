@@ -126,6 +126,10 @@ class TerminalPane(Gtk.Overlay):
         self.term.connect("child-exited", self._on_exit)
         self.term.connect("key-press-event", self._on_key)
         self.term.connect("button-press-event", self._on_button)
+        self._mouse_sel = False
+        self.term.connect("button-press-event", self._sel_press)
+        self.term.connect("motion-notify-event", self._sel_track)
+        self.term.connect("button-release-event", self._sel_release)
         self.term.connect("focus-in-event", lambda *_: self.owner and self.owner.set_active(self))
         self.term.connect("commit", lambda t, text, size: self.owner and self.owner.broadcast_from(self, text))
 
@@ -411,6 +415,11 @@ class TerminalPane(Gtk.Overlay):
                 if key == Gdk.KEY_b:
                     self.owner.toggle_broadcast()
                     return True
+        if mods == Gdk.ModifierType.CONTROL_MASK and key == Gdk.KEY_c and self.term.get_has_selection():
+            # como en Windows Terminal: con texto seleccionado Ctrl+C copia; sin selección va ^C
+            self.term.copy_clipboard_format(Vte.Format.TEXT)
+            self.term.unselect_all()
+            return True
         if mods == Gdk.ModifierType.MOD1_MASK and self.owner:
             if ev.keyval in (Gdk.KEY_Right, Gdk.KEY_Down):
                 self.owner.focus_next(1)
@@ -453,6 +462,44 @@ class TerminalPane(Gtk.Overlay):
         menu.show_all()
         return menu
 
+    # Selección normal aunque el servidor active el ratón (vim, tmux, htop, mc…).
+    # VTE solo selecciona en ese modo si el clic lleva Shift, así que se lo agregamos
+    # al evento antes de que llegue a VTE (button-press es RUN_LAST: este handler va antes).
+    def _sel_on(self):
+        return self.app.ui.get("mouse_select", True)
+
+    def _sel_press(self, widget, ev):
+        if ev.button not in (1, 2) or not self._sel_on():
+            return False
+        mods = ev.state & Gtk.accelerator_get_default_mod_mask()
+        if mods & ~Gdk.ModifierType.SHIFT_MASK:
+            return False  # Ctrl/Alt+clic: se respeta lo que pida el usuario
+        if ev.button == 1 and ev.type == Gdk.EventType.BUTTON_PRESS and not mods \
+                and self.term.get_has_selection():
+            self.term.unselect_all()  # sin esto, Shift+clic extendería la selección anterior
+        ev.state |= Gdk.ModifierType.SHIFT_MASK
+        self._mouse_sel = True
+        return False
+
+    def _sel_track(self, widget, ev):
+        if self._mouse_sel:
+            ev.state |= Gdk.ModifierType.SHIFT_MASK
+        return False
+
+    def _sel_release(self, widget, ev):
+        if self._mouse_sel and ev.button in (1, 2):
+            ev.state |= Gdk.ModifierType.SHIFT_MASK
+            self._mouse_sel = False
+        return False
+
+    def _toggle_mouse_select(self):
+        self.app.ui["mouse_select"] = not self._sel_on()
+        try:
+            from . import themes
+            themes.save_ui(self.app.ui)
+        except OSError:
+            pass
+
     def _on_button(self, widget, ev):
         if ev.button != 3:
             return False
@@ -470,8 +517,12 @@ class TerminalPane(Gtk.Overlay):
             menu.append(mi)
 
         item("Copiar", lambda: self.term.copy_clipboard_format(Vte.Format.TEXT), self.term.get_has_selection(),
-             "Ctrl+Shift+C")
+             "Ctrl+C")
         item("Pegar", self.term.paste_clipboard, accel="Ctrl+Shift+V")
+        ck = Gtk.CheckMenuItem(label="Seleccionar con el ratón aunque el servidor lo use")
+        ck.set_active(self._sel_on())
+        ck.connect("toggled", lambda *_: self._toggle_mouse_select())
+        menu.append(ck)
         menu.append(Gtk.SeparatorMenuItem())
         if self.owner:
             o = self.owner

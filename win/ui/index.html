@@ -74,8 +74,14 @@
   </aside>
 
   <div class="work">
-    <div class="tabs" id="tabs">
-      <button class="tab active" data-tab="home"><i class="ic" data-i="house"></i><span>Inicio</span></button>
+    <div class="tabbar">
+      <div class="tabs" id="tabs">
+        <button class="tab active" data-tab="home"><i class="ic" data-i="house"></i><span>Inicio</span></button>
+      </div>
+      <div class="tab-tools">
+        <button class="icon-btn" id="tool-side" title="Ocultar / mostrar el panel de hosts (F9)"><i class="ic" data-i="layout-sidebar"></i></button>
+        <button class="icon-btn" id="tool-focus" title="Pantalla completa: oculta los menús (F11)"><i class="ic" data-i="arrows-fullscreen"></i></button>
+      </div>
     </div>
     <div class="panes" id="panes">
       <div class="pane home active" data-tab="home">
@@ -100,7 +106,7 @@
             <button class="chip" id="home-import"><i class="ic" data-i="box-arrow-in-right"></i> Importar ~/.ssh/config</button>
           </div>
           <p class="hint">Doble clic en un host para conectar · clic derecho para más opciones · Ctrl+K buscar ·
-            Ctrl+Shift+T terminal local · Ctrl+Shift+W cerrar pestaña · Ctrl+Shift+C / V copiar y pegar en la terminal</p>
+            Ctrl+Shift+T terminal local · F9 ocultar panel · F11 pantalla completa · Ctrl+Shift+W cerrar pestaña · Ctrl+Shift+C / V copiar y pegar en la terminal</p>
           <p class="hint" id="home-version"></p>
         </div>
       </div>
@@ -126,5 +132,6 @@
 <script src="panels.js"></script>
 <script src="sftp.js"></script>
 <script src="db.js"></script>
+<script src="rdp.js"></script>
 </body>
 </html>

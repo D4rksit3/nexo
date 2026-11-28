@@ -10,7 +10,7 @@ web dentro de una ventana nativa.
 | Terminal | xterm.js 6 | xterm.js 6 |
 | SSH, SFTP y túneles | paramiko (sin `ssh`, `sshpass` ni `ssh-agent`) | igual |
 | Shell local | PowerShell 7 → Windows PowerShell → cmd, por ConPTY (`pywinpty`) | `$SHELL` por pty |
-| Escritorio remoto | `mstsc` (Conexión a Escritorio remoto de Windows) | FreeRDP |
+| Escritorio remoto | Control RDP de Windows (`mstscax.dll`) **incrustado en una pestaña** | FreeRDP (ventana aparte) |
 | Bases de datos | `nexo/dbclient.py` (PostgreSQL, MySQL/MariaDB, SQL Server, MongoDB, Redis) | igual |
 | Bóveda | `%APPDATA%\nexo\vault.enc` | `~/.local/share/nexo/vault.enc` (la misma de la app GTK) |
 | Llaves de servidor | `%APPDATA%\nexo\known_hosts` | `~/.ssh/known_hosts` |
@@ -40,9 +40,18 @@ Linux). Se abre con la misma contraseña maestra.
 - **Bases de datos**: árbol de objetos, cambio de base, editor (Ctrl+Enter ejecuta lo
   seleccionado o todo), resultados ordenables, copiar valores y exportar a CSV. Modo solo
   lectura y túnel automático por «Saltar por».
-- **RDP**: `mstsc` con un `.rdp` temporal (resolución, pantalla completa, portapapeles y
-  unidades). La contraseña va al Administrador de credenciales solo durante la sesión. Con
-  salto, abre un túnel automático.
+- **RDP dentro de Nexo**: el escritorio remoto se abre en una pestaña, con el mismo motor de
+  «Conexión a Escritorio remoto» pero sin su ventana ni sus avisos. No se usa un `.rdp`, así que no
+  aparece «No se puede identificar al editor». El certificado del servidor lo verifica Nexo, como
+  `known_hosts` en SSH: la primera vez lo recuerda (`%APPDATA%\nexo\rdp_known.json`) y conecta sin
+  preguntar. Solo si el certificado **cambia** pregunta, en un diálogo de Nexo. La contraseña va
+  directo a la sesión (no al disco ni al Administrador de credenciales). La resolución se ajusta
+  al tamaño de la pestaña. También hay pantalla completa del escritorio remoto, portapapeles,
+  unidades y túnel automático por «Saltar por». Si el control no se puede crear, cae a `mstsc`
+  como antes (`NEXO_RDP_EXTERNAL=1` lo fuerza).
+- **Pantalla completa**: **F9** oculta/muestra el panel de hosts (se recuerda) y **F11** oculta el
+  riel y el panel y pone la ventana a pantalla completa. Los dos están también como botones a la
+  derecha de las pestañas y en la paleta Ctrl+K.
 - **Llaves**: generar (Ed25519, RSA 4096 o ECDSA), importar un archivo o pegar la llave (con
   frase de paso), copiar o guardar la pública, renombrar y eliminar. Las `.ppk` de PuTTY se
   rechazan con instrucciones para convertirlas.
@@ -93,7 +102,8 @@ powershell -ExecutionPolicy Bypass -File win\build-msix.ps1   # → dist\Nexo-<v
 `win/`, el núcleo o el empaquetado:
 
 1. pruebas `smoke_backend.py` y `smoke_windows.py` (unidades, papelera, credenciales de RDP,
-   controladores de BD);
+   controladores de BD) y `rdp_embed_windows.py` (control RDP real: crear, eventos e inicio de
+   sesión contra el propio runner con un usuario temporal);
 2. `Nexo.exe` con PyInstaller y su autoprueba con WebView2;
 3. **instalador nativo** `Nexo-nativo-Setup-<versión>.exe` (Inno Setup, por usuario y sin
    administrador): lo instala en silencio, ejecuta la autoprueba del programa instalado y lo

@@ -94,6 +94,7 @@ class Api:
             "sep": os.sep,
             "home": os.path.expanduser("~"),
             "rdp": rdp.available(),
+            "ui": {"sidebar": bool(self._ui.get("sidebar", True))},
             "theme": self.theme(),
             "settings": self._settings() if self._vault.unlocked else None,
         }
@@ -101,7 +102,9 @@ class Api:
     def theme(self):
         t = T.get(self._ui.get("theme", T.DEFAULT), self._ui.get("accent"))
         return {"id": t["id"], "name": t["name"], "bg": t["bg"], "fg": t["fg"], "accent": t["accent"],
-                "accent_id": t["accent_id"], "palette": t["palette"], "ui": T.colors(t)}
+                "accent_id": t["accent_id"], "palette": t["palette"],
+                # la interfaz es siempre la neutra de Nexo; el tema solo pinta las terminales
+                "ui": T.colors(T.ui_theme(t)), "term_sel": T.colors(t)["sel"]}
 
     def themes(self):
         out = []
@@ -859,12 +862,19 @@ class Api:
 
     # --- RDP ---------------------------------------------------------------------------------
     @needs_vault
-    def open_rdp(self, host_id, password=None):
-        from . import rdp
+    def open_rdp(self, host_id, password=None, accept_cert=None):
+        """Escritorio remoto. En Windows va DENTRO de Nexo (control RDP incrustado): devuelve
+        {"embedded": True, "sid"} y la página llama a rdp_place con el área de la pestaña.
+        Sin el control (Linux o si falla) se abre aparte, como antes."""
+        from . import rdp, rdp_embed
 
         host, _ = self._host_for(host_id, password, ("rdp",))
         if not rdp.available():
             return _fail("No hay cliente de escritorio remoto en este equipo")
+        if host.get("auth") == "password" and not (host.get("password") or password):
+            return _fail("need_password")
+        if self._window is not None and rdp_embed.available():
+            return self._open_rdp_embedded(host, password, accept_cert)
 
         def done(sess, err):
             self._rdps.pop(host_id, None)
@@ -874,6 +884,101 @@ class Api:
         self._rdps[host_id] = s
         s.start()
         self._touch(host)
+        return {"ok": True, "embedded": False}
+
+    def _open_rdp_embedded(self, host, password, accept_cert):
+        from . import rdp, rdp_embed
+        from .forward import local_forward
+
+        real_host, real_port = host["host"], int(host.get("port") or 3389)
+        target_host, target_port, tunnel = real_host, real_port, None
+        if host.get("jump"):
+            jump = self._vault.host(host["jump"])
+            if not jump:
+                return _fail("El host de salto ya no existe")
+            tunnel, lport = local_forward(self._vault, jump, real_host, real_port)
+            target_host, target_port = "127.0.0.1", lport
+        try:
+            ok, fp, old = rdp.trust_check(f"{real_host}:{real_port}", target_host, target_port, accept_cert)
+        except Exception as e:  # noqa: BLE001
+            if tunnel:
+                tunnel.stop()
+            return _fail(f"No se pudo llegar a {real_host}:{real_port} ({_reason(e) or e})")
+        if not ok:
+            if tunnel:
+                tunnel.stop()
+            return {"ok": False, "cert_changed": True, "fingerprint": fp, "previous": old,
+                    "error": "El certificado del servidor cambió"}
+        sid = "rdp-" + new_id()
+        hid, name = host["id"], host["name"]
+
+        def on_event(sess, state, msg):
+            if state == "closed":
+                self._rdps.pop(sid, None)
+            self._emit("rdp_state", {"sid": sid, "id": hid, "name": name, "state": state, "error": msg})
+
+        s = rdp_embed.EmbeddedRdp(self._window.native, host, target_host, target_port,
+                                  password or host.get("password"), on_event, tunnel=tunnel)
+        self._rdps[sid] = s
+        self._touch(host)
+        return {"ok": True, "embedded": True, "sid": sid, "title": name, "fingerprint": fp, "new_cert": old is None}
+
+    @guarded
+    def rdp_place(self, sid, x, y, w, h, visible=True):
+        """La página informa dónde está el área de la pestaña (píxeles CSS). La primera vez
+        crea el control y conecta."""
+        s = self._rdps.get(sid)
+        if s is None or not hasattr(s, "place"):
+            return _fail("Esa sesión ya no existe")
+        if not s.started:
+            if not visible:
+                return {"ok": True}
+            try:
+                s.attach(float(x), float(y), float(w), float(h), True)
+            except Exception as e:  # noqa: BLE001
+                self._rdps.pop(sid, None)
+                s.close()
+                return _fail(f"No se pudo iniciar el escritorio remoto: {e}")
+            return {"ok": True}
+        s.place(float(x), float(y), float(w), float(h), bool(visible))
+        return {"ok": True}
+
+    @guarded
+    def rdp_focus(self, sid):
+        s = self._rdps.get(sid)
+        if s is not None and hasattr(s, "focus"):
+            s.focus()
+        return {"ok": True}
+
+    @guarded
+    def rdp_fullscreen(self, sid, on=True):
+        s = self._rdps.get(sid)
+        if s is None or not hasattr(s, "set_fullscreen"):
+            return _fail("Esa sesión ya no existe")
+        s.set_fullscreen(bool(on))
+        return {"ok": True}
+
+    @guarded
+    def rdp_close(self, sid):
+        s = self._rdps.pop(sid, None)
+        if s is not None:
+            (s.close if hasattr(s, "close") else s.stop)()
+        return {"ok": True}
+
+    # --- ventana -----------------------------------------------------------------------------
+    @guarded
+    def set_ui_pref(self, key, value):
+        """Preferencias de la interfaz que no son secretas (ui.json, compartido con Linux)."""
+        if key not in ("sidebar",):
+            return _fail("Preferencia desconocida")
+        self._ui[key] = bool(value)
+        T.save_ui(self._ui)
+        return {"ok": True}
+
+    @guarded
+    def window_fullscreen(self):
+        if self._window is not None:
+            self._window.toggle_fullscreen()
         return {"ok": True}
 
     # --- organizaciones (Nexo Server) ------------------------------------------------------------
@@ -978,7 +1083,10 @@ class Api:
             t.stop()
         self._tunnels.clear()
         for r in list(self._rdps.values()):
-            r.stop()
+            try:
+                (r.close if hasattr(r, "close") else r.stop)()
+            except Exception:  # noqa: BLE001
+                pass
         self._rdps.clear()
         self._pending_key = None
 

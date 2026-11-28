@@ -4,8 +4,8 @@
 let currentPanel = "hosts";
 function showPanel(name, toggle = false) {
   const side = $("#side");
-  if (toggle && name === currentPanel && !side.hidden) { side.hidden = true; return; }
-  side.hidden = false;
+  if (toggle && name === currentPanel && !side.hidden) return setSidebar(false);
+  if (side.hidden) setSidebar(true);
   currentPanel = name;
   $$(".rail-btn[data-panel]").forEach(b => b.classList.toggle("active", b.dataset.panel === name));
   $$(".side-panel").forEach(p => (p.hidden = p.dataset.panel !== name));
@@ -245,7 +245,7 @@ async function openSettings() {
   const th = await call("themes");
   const body = [];
   // Apariencia
-  body.push(el("div", "section-label", "TEMA"));
+  body.push(el("div", "section-label", "TEMA DE LAS TERMINALES"));
   const grid = el("div", "theme-grid");
   const paintThemes = cur => {
     grid.replaceChildren();

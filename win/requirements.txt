@@ -4,6 +4,8 @@ websockets>=13.0
 paramiko>=3.4
 cryptography>=42
 pywinpty>=2.0 ; sys_platform == "win32"
+# escritorio remoto incrustado (control RDP de Windows, mstscax.dll)
+comtypes>=1.4 ; sys_platform == "win32"
 # controladores de bases de datos (los mismos que usa nexo/dbclient.py)
 psycopg2-binary>=2.9
 pymysql>=1.1

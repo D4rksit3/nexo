@@ -22,6 +22,7 @@ python -m PyInstaller --noconfirm --clean --windowed `
   --hidden-import nexo.dbclient --hidden-import nexo.orgclient `
   --hidden-import psycopg2 --hidden-import pymysql --collect-all pymssql `
   --collect-submodules pymongo --collect-submodules bson --collect-submodules redis `
+  --collect-submodules comtypes `
   win\run.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller falló" }
 

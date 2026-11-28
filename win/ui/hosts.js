@@ -40,14 +40,7 @@ function hostSub(h) {
 // ---------- abrir ----------
 async function openHost(h, mode) {
   if (h.protocol === "ssh") return mode === "sftp" ? openSftp(h) : connect(h);
-  if (h.protocol === "rdp") {
-    const r = await call("open_rdp", h.id, null);
-    if (!r.ok) return toast(r.error, true);
-    toast(`Abriendo escritorio remoto de ${h.name}…`);
-    h.last_used = Date.now() / 1000;
-    renderHome();
-    return;
-  }
+  if (h.protocol === "rdp") return openRdp(h);
   if (DB_PROTOCOLS.includes(h.protocol)) return openDb(h);
 }
 EVENTS.rdp_closed = ev => { if (ev.error) toast(`${ev.name}: ${ev.error}`, true); };
@@ -375,7 +368,7 @@ async function editHost(id, group = null) {
   const fShare = check("Compartir mis unidades con el equipo remoto", o.share_home);
   rp.append(field("Dominio", fDomain), field("Resolución", fRes), fFull, fClip, fShare,
             el("p", "muted small", INFO.platform === "windows"
-              ? "Se abre con Conexión a Escritorio remoto de Windows (mstsc). Si guardas la contraseña, Nexo la entrega solo durante la sesión y la borra al cerrar."
+              ? "Se abre dentro de Nexo, en una pestaña, sin los avisos de Windows: Nexo recuerda el certificado del servidor la primera vez y solo pregunta si cambia. La contraseña va directo a la sesión, sin pasar por el disco."
               : "En Linux se abre con FreeRDP."));
 
   // Base de datos

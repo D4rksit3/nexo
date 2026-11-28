@@ -34,6 +34,22 @@ jobs:
       - name: Prueba de lo propio de Windows (unidades, papelera, credenciales RDP, .rdp, controladores de BD)
         run: python win/tests/smoke_windows.py
 
+      - name: Escritorio remoto incrustado (control RDP real de Windows)
+        shell: pwsh
+        run: |
+          # Inicio de sesión real contra el propio runner con un usuario temporal. Si el runner no
+          # permite habilitar RDP, la prueba igual comprueba crear el control, conectar y recibir eventos.
+          try {
+            Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+            Start-Service TermService -ErrorAction Stop
+            $pw = "Nx-" + [guid]::NewGuid().ToString("N").Substring(0, 12) + "-a1A"
+            New-LocalUser -Name nexordp -Password (ConvertTo-SecureString $pw -AsPlainText -Force) -ErrorAction Stop | Out-Null
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member nexordp
+            $env:NEXO_RDP_TEST_HOST = "127.0.0.2"; $env:NEXO_RDP_TEST_USER = "nexordp"; $env:NEXO_RDP_TEST_PASSWORD = $pw
+          } catch { Write-Host "Sin RDP en el runner: $_" }
+          python win/tests/rdp_embed_windows.py
+          if ($LASTEXITCODE -ne 0) { throw "La prueba del RDP incrustado falló" }
+
       - name: Compilar Nexo.exe
         run: powershell -ExecutionPolicy Bypass -File win/build.ps1
 

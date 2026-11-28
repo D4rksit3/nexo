@@ -197,7 +197,7 @@ class Window(Gtk.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.set_border_width(14)
         t = Gtk.Label(xalign=0)
-        t.set_markup("<b>Tema</b>  <small>— terminal e interfaz</small>")
+        t.set_markup("<b>Tema de las terminales</b>")
         box.pack_start(t, False, False, 0)
         flow = Gtk.FlowBox(max_children_per_line=3, min_children_per_line=3,
                            selection_mode=Gtk.SelectionMode.NONE, column_spacing=8, row_spacing=8)
@@ -216,7 +216,7 @@ class Window(Gtk.ApplicationWindow):
         box.pack_start(flow, False, False, 0)
 
         at = Gtk.Label(xalign=0)
-        at.set_markup("<b>Color de acento</b>  <small>— bordes, selección, botones</small>")
+        at.set_markup("<b>Color de acento</b>  <small>— interfaz y terminales</small>")
         at.set_margin_top(6)
         box.pack_start(at, False, False, 0)
         dots = Gtk.Box(spacing=4)

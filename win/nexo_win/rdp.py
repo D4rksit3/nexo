@@ -6,8 +6,13 @@
   SESIÓN (desaparece al cerrar sesión) y Nexo la borra en cuanto mstsc se cierra.
 - El .rdp temporal se borra a los pocos segundos, cuando mstsc ya lo leyó.
 """
+import hashlib
+import json
 import os
 import shutil
+import socket
+import ssl
+import struct
 import subprocess
 import tempfile
 import threading
@@ -63,6 +68,96 @@ def cred_delete(target):
         adv.CredDeleteW(target, CRED_TYPE_DOMAIN_PASSWORD, 0)
     except Exception:  # noqa: BLE001
         pass
+
+
+# --- confianza en el certificado del servidor (como known_hosts de SSH) -------------------------
+#
+# Los servidores RDP usan casi siempre un certificado autofirmado, y por eso Windows muestra
+# «No se puede comprobar la identidad del equipo remoto». Nexo hace lo mismo que con SSH:
+# la primera vez recuerda la huella SHA-256 del certificado y conecta sin preguntar; las
+# siguientes compara, y solo si CAMBIÓ pide confirmación (dentro de Nexo, no con un aviso de Windows).
+
+def known_path():
+    base = os.path.dirname(os.environ.get("NEXO_KNOWN_HOSTS", "")) or os.path.join(
+        os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "nexo")
+    return os.path.join(base, "rdp_known.json")
+
+
+def _load_known():
+    try:
+        with open(known_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def remember(key, fp):
+    data = _load_known()
+    data[key] = fp
+    path = known_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, path)
+
+
+def server_cert(host, port, timeout=8):
+    """Huella SHA-256 (hex con «:») del certificado TLS del servidor RDP, o None si el
+    servidor solo habla la seguridad RDP antigua (sin TLS)."""
+    neg = struct.pack("<BBHI", 0x01, 0x00, 8, 0x00000003)            # pide TLS o NLA
+    x224 = bytes([0xE0, 0, 0, 0, 0, 0]) + neg
+    pkt = bytes([3, 0]) + struct.pack(">H", 4 + 1 + len(x224)) + bytes([len(x224)]) + x224
+    with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+        sock.sendall(pkt)
+        head = _recv(sock, 4)
+        if head[0] != 3:
+            raise ConnectionError("Ese puerto no responde como un servidor RDP")
+        body = _recv(sock, struct.unpack(">H", head[2:4])[0] - 4)
+        if len(body) < 2 or body[1] & 0xF0 != 0xD0:
+            raise ConnectionError("Ese puerto no responde como un servidor RDP")
+        if len(body) < 15:                  # servidor muy viejo, sin negociación: no hay TLS
+            return None
+        ntype, sel = body[7], struct.unpack("<I", body[11:15])[0]
+        if ntype == 0x03 or sel == 0:       # fallo de negociación o RDP clásico: no hay TLS
+            return None
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+        except (ValueError, ssl.SSLError):
+            pass
+        with ctx.wrap_socket(sock, server_hostname=None) as tls:
+            der = tls.getpeercert(binary_form=True)
+    d = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(d[i:i + 2] for i in range(0, len(d), 2))
+
+
+def _recv(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("El servidor RDP cerró la conexión")
+        buf += chunk
+    return buf
+
+
+def trust_check(key, host, port, accept=None):
+    """Compara el certificado con el recordado para «key» (host:puerto real).
+    Devuelve (ok, huella, anterior). ok=False solo si cambió y no se aceptó esa huella."""
+    fp = server_cert(host, port)
+    if fp is None:
+        return True, None, None
+    old = _load_known().get(key)
+    if old == fp:
+        return True, fp, old
+    if old is None or accept == fp:
+        remember(key, fp)
+        return True, fp, old
+    return False, fp, old
 
 
 # --- archivo .rdp ---------------------------------------------------------------------

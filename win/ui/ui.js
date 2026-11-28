@@ -148,11 +148,12 @@ function modal(o) {
         if (k) k.disabled = false;
       }
     });
-    d.addEventListener("close", () => { d.remove(); if (!done) resolve(null); });
+    d.addEventListener("close", () => { d.remove(); if (!done) resolve(null); syncNative(); });
     d.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); } });
     document.body.append(d);
     paintIcons(d);
     d.showModal();
+    syncNative();
     const first = $("input:not([type=checkbox]):not([disabled]), textarea, select", body);
     if (o.focus !== false && first) setTimeout(() => { first.focus(); if (first.select) first.select(); }, 30);
   });
@@ -185,9 +186,10 @@ function choose(title, text, buttons) {
       menu.append(x);
     }
     d.append(menu);
-    d.addEventListener("close", () => { d.remove(); if (!done) resolve(null); });
+    d.addEventListener("close", () => { d.remove(); if (!done) resolve(null); syncNative(); });
     document.body.append(d);
     d.showModal();
+    syncNative();
     const prim = $(".primary", menu);
     if (prim) prim.focus();
   });
@@ -212,6 +214,7 @@ function contextMenu(ev, items) {
     m.append(b);
   }
   m.hidden = false;
+  syncNative();
   const r = m.getBoundingClientRect();
   const x = Math.min(ev.clientX, innerWidth - r.width - 6), y = Math.min(ev.clientY, innerHeight - r.height - 6);
   m.style.left = Math.max(4, x) + "px";
@@ -219,7 +222,10 @@ function contextMenu(ev, items) {
   const first = $(".ctx-item:not(:disabled)", m);
   if (first) first.focus();
 }
-function hideMenu() { $("#ctx").hidden = true; }
+function hideMenu() { const m = $("#ctx"); if (!m.hidden) { m.hidden = true; syncNative(); } }
+/* El escritorio remoto es una ventana nativa encima de la página: se esconde mientras haya
+   un diálogo, la paleta o un menú, que si no quedarían debajo (rdp.js). */
+function syncNative() { if (typeof rdpSync === "function") rdpSync(true); }
 document.addEventListener("mousedown", e => { if (!e.target.closest("#ctx")) hideMenu(); });
 document.addEventListener("keydown", e => {
   const m = $("#ctx");

@@ -5,7 +5,8 @@ Los límites de largo son los de Partner Center.
 
 ## Nombre
 
-`Nexo` (o el nombre que hayas reservado; si «Nexo» está tomado: «Nexo SSH» o «Nexo — SSH y SFTP»).
+`Nexo-remote` (el nombre reservado en Partner Center; tiene que coincidir con la variable
+`MSIX_DISPLAY_NAME` del repositorio, que es el nombre visible dentro del paquete).
 
 ## Descripción breve (máx. 200 caracteres para la vista de búsqueda)
 
