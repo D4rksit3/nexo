@@ -149,12 +149,6 @@ class _Sink:
     def __init__(self, owner):
         self.o = owner
 
-    def __getattr__(self, name):
-        # eventos que Nexo no usa; con NEXO_RDP_DEBUG=1 se registran para diagnosticar
-        if name.startswith("On") and os.environ.get("NEXO_RDP_DEBUG") == "1":
-            return lambda *a: print(f"[rdp] evento {name} {a!r}", flush=True)
-        raise AttributeError(name)
-
     def _dbg(self, name, a):
         if os.environ.get("NEXO_RDP_DEBUG") == "1":
             print(f"[rdp] evento {name} {a!r}", flush=True)
@@ -178,6 +172,19 @@ class _Sink:
     def OnFatalError(self, *a):
         self._dbg("OnFatalError", a)
         self.o._on_disconnected(-1, f"Error interno del control RDP ({a[-1] if a else '?'})")
+
+    # solo para diagnosticar (NEXO_RDP_DEBUG=1)
+    def OnWarning(self, *a):
+        self._dbg("OnWarning", a)
+
+    def OnLogonError(self, *a):
+        self._dbg("OnLogonError", a)
+
+    def OnAuthenticationWarningDisplayed(self, *a):
+        self._dbg("OnAuthenticationWarningDisplayed", a)
+
+    def OnAutoReconnecting2(self, *a):
+        self._dbg("OnAutoReconnecting2", a)
 
     def OnLeaveFullScreenMode(self, *a):
         self.o._event("windowed")
